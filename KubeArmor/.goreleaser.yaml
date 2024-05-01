@@ -9,6 +9,18 @@ builds:
       - amd64
       - arm64
 
+signs:
+  - cmd: cosign
+    certificate: '${artifact}.cert'
+    args:
+      - sign-blob
+      - '--output-certificate=${certificate}' 
+      - '--output-signature=${signature}'
+      - '${artifact}'
+      - --yes
+    artifacts: all
+    output: true
+    
 archives:
   - id: "kubearmor"
     builds:
