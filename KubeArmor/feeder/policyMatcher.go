@@ -934,9 +934,17 @@ func matchResources(secPolicy tp.MatchPolicy, log tp.Log) bool {
 		if secPolicy.ResourceType == "Path" && secPolicy.Resource == firstLogResource {
 			return true
 		}
+
+		// check if the log's resource directory starts with the policy's resource directory
 		if secPolicy.ResourceType == "Directory" && (strings.HasPrefix(firstLogResourceDir, secPolicy.Resource) &&
+			// for non-recursive rule - check if the directory depth of the log matches the policy resource's depth
 			((!secPolicy.Recursive && firstLogResourceDirCount == strings.Count(secPolicy.Resource, "/")) ||
-				(secPolicy.Recursive && firstLogResourceDirCount >= strings.Count(secPolicy.Resource, "/")))) || (secPolicy.Resource == (log.Resource + "/")) {
+				// for recursive rule - check the log's directory is at the same or deeper level than the policy's resource
+				(secPolicy.Recursive && firstLogResourceDirCount >= strings.Count(secPolicy.Resource, "/")))) ||
+			// exact matching - check if the policy's resource is exactly the logged resource with a trailing slash
+			(secPolicy.Resource == (log.Resource + "/")) ||
+			// match if the policy is recursive and applies to the root directory
+			(secPolicy.Resource == "/" && secPolicy.Recursive) {
 			return true
 		}
 	}
@@ -1752,19 +1760,19 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 		if log.Type == "" {
 			// host log
 			if log.Operation == "Process" {
-				if setLogFields(&log, existFileAllowPolicy, "allow", fd.Node.ProcessVisibilityEnabled, false) {
+				if setLogFields(&log, existFileAllowPolicy, cfg.GlobalCfg.DefaultFilePosture, fd.Node.ProcessVisibilityEnabled, false) {
 					return log
 				}
 			} else if log.Operation == "File" {
-				if setLogFields(&log, existFileAllowPolicy, "allow", fd.Node.FileVisibilityEnabled, false) {
+				if setLogFields(&log, existFileAllowPolicy, cfg.GlobalCfg.DefaultFilePosture, fd.Node.FileVisibilityEnabled, false) {
 					return log
 				}
 			} else if log.Operation == "Network" {
-				if setLogFields(&log, existNetworkAllowPolicy, "allow", fd.Node.NetworkVisibilityEnabled, false) {
+				if setLogFields(&log, existNetworkAllowPolicy, cfg.GlobalCfg.DefaultNetworkPosture, fd.Node.NetworkVisibilityEnabled, false) {
 					return log
 				}
 			} else if log.Operation == "Capabilities" {
-				if setLogFields(&log, existCapabilitiesAllowPolicy, "allow", fd.Node.CapabilitiesVisibilityEnabled, false) {
+				if setLogFields(&log, existCapabilitiesAllowPolicy, cfg.GlobalCfg.DefaultCapabilitiesPosture, fd.Node.CapabilitiesVisibilityEnabled, false) {
 					return log
 				}
 			}
