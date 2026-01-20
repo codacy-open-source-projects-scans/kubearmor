@@ -74,6 +74,8 @@ spec:
                 type: boolean
               controllerPort:
                 type: integer
+              matchArgs:
+                type: boolean
               defaultCapabilitiesPosture:
                 enum:
                 - audit
@@ -91,6 +93,8 @@ spec:
                 type: string
               defaultVisibility:
                 type: string
+              dropResourceFromProcessLogs:
+                type: boolean
               enableNRI:
                 type: boolean
               enableStdOutAlerts:

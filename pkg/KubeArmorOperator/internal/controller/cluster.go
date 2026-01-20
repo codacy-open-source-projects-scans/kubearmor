@@ -244,7 +244,7 @@ func (clusterWatcher *ClusterWatcher) WatchNodes() {
 	log := clusterWatcher.Log
 	nodeInformer := informer.Core().V1().Nodes().Informer()
 	nodeInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
+		AddFunc: func(obj any) {
 			if node, ok := obj.(*corev1.Node); ok {
 				runtime := node.Status.NodeInfo.ContainerRuntimeVersion
 				runtime = strings.Split(runtime, ":")[0]
@@ -260,7 +260,7 @@ func (clusterWatcher *ClusterWatcher) WatchNodes() {
 				}
 			}
 		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
+		UpdateFunc: func(oldObj, newObj any) {
 
 			if node, ok := newObj.(*corev1.Node); ok {
 				oldRand := ""
@@ -350,7 +350,7 @@ func (clusterWatcher *ClusterWatcher) WatchNodes() {
 				log.Error(newObj)
 			}
 		},
-		DeleteFunc: func(obj interface{}) {
+		DeleteFunc: func(obj any) {
 			if node, ok := obj.(*corev1.Node); ok {
 				deletedNode := Node{}
 				clusterWatcher.NodesLock.Lock()
@@ -432,7 +432,7 @@ func (clusterWatcher *ClusterWatcher) WatchConfigCrd() {
 
 	informer.AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
-			AddFunc: func(obj interface{}) {
+			AddFunc: func(obj any) {
 				configCrdList, err := clusterWatcher.Opv1Client.OperatorV1().KubeArmorConfigs(common.Namespace).List(context.Background(), metav1.ListOptions{})
 				if err != nil {
 					clusterWatcher.Log.Warn("Failed to list Operator Config CRs")
@@ -476,7 +476,7 @@ func (clusterWatcher *ClusterWatcher) WatchConfigCrd() {
 
 				}
 			},
-			UpdateFunc: func(oldObj, newObj interface{}) {
+			UpdateFunc: func(oldObj, newObj any) {
 				if cfg, ok := newObj.(*opv1.KubeArmorConfig); ok {
 					// update configmap only if it's operating crd
 					if common.OperatorConfigCrd != nil && cfg.Name == common.OperatorConfigCrd.Name {
@@ -520,7 +520,7 @@ func (clusterWatcher *ClusterWatcher) WatchConfigCrd() {
 					}
 				}
 			},
-			DeleteFunc: func(obj interface{}) {
+			DeleteFunc: func(obj any) {
 				if cfg, ok := obj.(*opv1.KubeArmorConfig); ok {
 					if common.OperatorConfigCrd != nil && cfg.Name == common.OperatorConfigCrd.Name {
 						common.OperatorConfigCrd = nil
@@ -1519,6 +1519,11 @@ func UpdateConfigMapData(config *opv1.KubeArmorConfigSpec) bool {
 		}
 		configMapData += fmt.Sprintf("%s: %s\n", common.ConfigDefaultNetworkPosture, config.DefaultNetworkPosture)
 	}
+	DropResourceFromProcessLogs := strconv.FormatBool(config.DropResourceFromProcessLogs)
+	if common.ConfigMapData[common.ConfigDropResourceFromProcessLogs] != DropResourceFromProcessLogs {
+		common.ConfigMapData[common.ConfigDropResourceFromProcessLogs] = DropResourceFromProcessLogs
+		updated = true
+	}
 	if config.DefaultVisibility != "" {
 		if common.ConfigMapData[common.ConfigVisibility] != config.DefaultVisibility {
 			common.ConfigMapData[common.ConfigVisibility] = config.DefaultVisibility
@@ -1552,6 +1557,13 @@ func UpdateConfigMapData(config *opv1.KubeArmorConfigSpec) bool {
 		updated = true
 	}
 	configMapData += fmt.Sprintf("%s: %s\n", common.ConfigThrottleSec, ThrottleSec)
+
+	MatchArgsEnabled := strconv.FormatBool(config.MatchArgs)
+	if common.ConfigMapData[common.ConfigArgMatching] != MatchArgsEnabled {
+		common.ConfigMapData[common.ConfigArgMatching] = MatchArgsEnabled
+		updated = true
+	}
+	configMapData += fmt.Sprintf("%s: %t\n", common.ConfigArgMatching, config.MatchArgs)
 
 	common.ConfigMapData[common.KubeArmorConfigFileName] = configMapData
 

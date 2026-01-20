@@ -71,6 +71,8 @@ spec:
                 type: object
               alertThrottling:
                 type: boolean
+              matchArgs:
+                type: boolean
               controllerPort:
                 type: integer
               defaultCapabilitiesPosture:
@@ -90,6 +92,8 @@ spec:
                 type: string
               defaultVisibility:
                 type: string
+              dropResourceFromProcessLogs:
+                type: boolean
               enableNRI:
                 type: boolean
               enableStdOutAlerts:

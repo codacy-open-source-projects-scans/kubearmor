@@ -5,11 +5,11 @@
 package config
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"strings"
-
-	"flag"
+	"sync/atomic"
 
 	kg "github.com/kubearmor/KubeArmor/KubeArmor/log"
 	"github.com/spf13/viper"
@@ -52,13 +52,13 @@ type KubearmorConfig struct {
 	HostDefaultCapabilitiesPosture string // Default Enforcement Action in Global Capabilities Context
 	HostDefaultDevicePosture       string // Default Enforcement Action in Global USB Device Conntext
 
-	CoverageTest       bool     // Enable/Disable Coverage Test
-	ConfigUntrackedNs  []string // untracked namespaces
-	LsmOrder           []string // LSM order
-	BPFFsPath          string   // path to the BPF filesystem
-	EnforcerAlerts     bool     // policy enforcer
-	DefaultPostureLogs bool     // Enable/Disable Default Posture logs for AppArmor LSM
-	InitTimeout        string   // Timeout for main thread init stages
+	CoverageTest       bool         // Enable/Disable Coverage Test
+	ConfigUntrackedNs  atomic.Value // untracked namespaces
+	LsmOrder           []string     // LSM order
+	BPFFsPath          string       // path to the BPF filesystem
+	EnforcerAlerts     bool         // policy enforcer
+	DefaultPostureLogs bool         // Enable/Disable Default Posture logs for AppArmor LSM
+	InitTimeout        string       // Timeout for main thread init stages
 
 	StateAgent  bool // enable KubeArmor state agent
 	UseOCIHooks bool
@@ -70,9 +70,13 @@ type KubearmorConfig struct {
 
 	ProcFsMount string // path where procfs is hosted
 
+	DropResourceFromProcessLogs bool // optionally drop resource field from process logs
+
 	MachineIDPath string // path to machine-id
 
 	USBDeviceHandler bool // enable USB device observability and enforcement
+
+	MatchArgs bool // enable argument rules for policy
 }
 
 // GlobalCfg Global configuration for Kubearmor
@@ -123,10 +127,12 @@ const (
 	ConfigThrottleSec                    string = "throttleSec"
 	ConfigAnnotateResources              string = "annotateResources"
 	ConfigProcFsMount                    string = "procfsMount"
+	ConfigDropResourceFromProcessLogs    string = "dropResourceFromProcessLogs"
 	ConfigMachineIDPath                  string = "machineIDPath"
 	UseOCIHooks                          string = "useOCIHooks"
 	ConfigEnableIma                      string = "enableIMA"
 	ConfigUSBDeviceHandler               string = "enableUSBDeviceHandler"
+	ConfigArgMatching                    string = "matchArgs"
 )
 
 func readCmdLineParams() {
@@ -195,6 +201,10 @@ func readCmdLineParams() {
 
 	enableIMA := flag.Bool(ConfigEnableIma, false, "to enable/disable file integrity IMA hash using bpf_file_ima_hash")
 	usbDeviceHandler := flag.Bool(ConfigUSBDeviceHandler, false, "Enable USB device observability and enforcement")
+
+	dropResourceFromProcessLogs := flag.Bool(ConfigDropResourceFromProcessLogs, false, "drop resource field from process logs")
+
+	matchArgs := flag.Bool(ConfigArgMatching, true, "enabling Argument matching")
 
 	flags := []string{}
 	flag.VisitAll(func(f *flag.Flag) {
@@ -271,6 +281,10 @@ func readCmdLineParams() {
 	viper.SetDefault(ConfigEnableIma, *enableIMA)
 
 	viper.SetDefault(ConfigUSBDeviceHandler, *usbDeviceHandler)
+
+	viper.SetDefault(ConfigDropResourceFromProcessLogs, *dropResourceFromProcessLogs)
+
+	viper.SetDefault(ConfigArgMatching, *matchArgs)
 }
 
 // LoadConfig Load configuration
@@ -341,7 +355,7 @@ func LoadConfig() error {
 
 	GlobalCfg.CoverageTest = viper.GetBool(ConfigCoverageTest)
 
-	GlobalCfg.ConfigUntrackedNs = strings.Split(viper.GetString(ConfigUntrackedNs), ",")
+	GlobalCfg.ConfigUntrackedNs.Store(strings.Split(viper.GetString(ConfigUntrackedNs), ","))
 
 	GlobalCfg.LsmOrder = strings.Split(viper.GetString(LsmOrder), ",")
 
@@ -358,6 +372,10 @@ func LoadConfig() error {
 	GlobalCfg.MachineIDPath = viper.GetString(ConfigMachineIDPath)
 
 	GlobalCfg.USBDeviceHandler = viper.GetBool(ConfigUSBDeviceHandler)
+
+	GlobalCfg.DropResourceFromProcessLogs = viper.GetBool(ConfigDropResourceFromProcessLogs)
+
+	GlobalCfg.MatchArgs = viper.GetBool(ConfigArgMatching)
 
 	LoadDynamicConfig()
 

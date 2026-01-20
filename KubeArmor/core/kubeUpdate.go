@@ -8,10 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -92,11 +92,12 @@ func (dm *KubeArmorDaemon) HandleNodeAnnotations(node *tp.Node) {
 		}
 	}
 
-	if node.Annotations["kubearmor-policy"] == "enabled" {
+	switch node.Annotations["kubearmor-policy"] {
+	case "enabled":
 		node.PolicyEnabled = tp.KubeArmorPolicyEnabled
-	} else if node.Annotations["kubearmor-policy"] == "audited" {
+	case "audited":
 		node.PolicyEnabled = tp.KubeArmorPolicyAudited
-	} else { // disabled
+	default: // disabled
 		node.PolicyEnabled = tp.KubeArmorPolicyDisabled
 	}
 
@@ -104,14 +105,15 @@ func (dm *KubeArmorDaemon) HandleNodeAnnotations(node *tp.Node) {
 		node.Annotations["kubearmor-visibility"] = cfg.GlobalCfg.HostVisibility
 	}
 
-	for _, visibility := range strings.Split(node.Annotations["kubearmor-visibility"], ",") {
-		if visibility == "process" {
+	for visibility := range strings.SplitSeq(node.Annotations["kubearmor-visibility"], ",") {
+		switch visibility {
+		case "process":
 			node.ProcessVisibilityEnabled = true
-		} else if visibility == "file" {
+		case "file":
 			node.FileVisibilityEnabled = true
-		} else if visibility == "network" {
+		case "network":
 			node.NetworkVisibilityEnabled = true
-		} else if visibility == "capabilities" {
+		case "capabilities":
 			node.CapabilitiesVisibilityEnabled = true
 		}
 	}
@@ -135,9 +137,7 @@ func (dm *KubeArmorDaemon) checkAndUpdateNode(item *corev1.Node) {
 	node.Identities = []string{}
 
 	// update annotations
-	for k, v := range item.ObjectMeta.Annotations {
-		node.Annotations[k] = v
-	}
+	maps.Copy(node.Annotations, item.ObjectMeta.Annotations)
 
 	// update labels and identities
 	for k, v := range item.ObjectMeta.Labels {
@@ -230,23 +230,25 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 		slices.Sort(newPoint.Identities)
 
 		// update policy flag
-		if pod.Annotations["kubearmor-policy"] == "enabled" {
+		switch pod.Annotations["kubearmor-policy"] {
+		case "enabled":
 			newPoint.PolicyEnabled = tp.KubeArmorPolicyEnabled
-		} else if pod.Annotations["kubearmor-policy"] == "audited" {
+		case "audited":
 			newPoint.PolicyEnabled = tp.KubeArmorPolicyAudited
-		} else { // disabled
+		default: // disabled
 			newPoint.PolicyEnabled = tp.KubeArmorPolicyDisabled
 		}
 
 		// parse annotations and update visibility flags
-		for _, visibility := range strings.Split(pod.Annotations["kubearmor-visibility"], ",") {
-			if visibility == "process" {
+		for visibility := range strings.SplitSeq(pod.Annotations["kubearmor-visibility"], ",") {
+			switch visibility {
+			case "process":
 				newPoint.ProcessVisibilityEnabled = true
-			} else if visibility == "file" {
+			case "file":
 				newPoint.FileVisibilityEnabled = true
-			} else if visibility == "network" {
+			case "network":
 				newPoint.NetworkVisibilityEnabled = true
-			} else if visibility == "capabilities" {
+			case "capabilities":
 				newPoint.CapabilitiesVisibilityEnabled = true
 			}
 		}
@@ -360,7 +362,8 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 				dm.Logger.UpdateSecurityPolicies(action, endpoint)
 				if newPoint.PolicyEnabled == tp.KubeArmorPolicyEnabled {
 					// enforce security policies
-					if !kl.ContainsElement(dm.SystemMonitor.UntrackedNamespaces, endpoint.NamespaceName) {
+					if !kl.ContainsElement(cfg.GlobalCfg.ConfigUntrackedNs.Load().([]string), endpoint.NamespaceName) || action == deleteEvent {
+						// we want to avoid new policies in untracked namespaces but deletion of the existing policies should be allowed
 						if dm.RuntimeEnforcer != nil {
 							dm.RuntimeEnforcer.UpdateSecurityPolicies(endpoint)
 						}
@@ -406,11 +409,12 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 			slices.Sort(newEndPoint.Identities)
 
 			// update policy flag
-			if pod.Annotations["kubearmor-policy"] == "enabled" {
+			switch pod.Annotations["kubearmor-policy"] {
+			case "enabled":
 				newEndPoint.PolicyEnabled = tp.KubeArmorPolicyEnabled
-			} else if pod.Annotations["kubearmor-policy"] == "audited" {
+			case "audited":
 				newEndPoint.PolicyEnabled = tp.KubeArmorPolicyAudited
-			} else { // disabled
+			default: // disabled
 				newEndPoint.PolicyEnabled = tp.KubeArmorPolicyDisabled
 			}
 
@@ -420,14 +424,15 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 			newEndPoint.CapabilitiesVisibilityEnabled = false
 
 			// parse annotations and update visibility flags
-			for _, visibility := range strings.Split(pod.Annotations["kubearmor-visibility"], ",") {
-				if visibility == "process" {
+			for visibility := range strings.SplitSeq(pod.Annotations["kubearmor-visibility"], ",") {
+				switch visibility {
+				case "process":
 					newEndPoint.ProcessVisibilityEnabled = true
-				} else if visibility == "file" {
+				case "file":
 					newEndPoint.FileVisibilityEnabled = true
-				} else if visibility == "network" {
+				case "network":
 					newEndPoint.NetworkVisibilityEnabled = true
-				} else if visibility == "capabilities" {
+				case "capabilities":
 					newEndPoint.CapabilitiesVisibilityEnabled = true
 				}
 			}
@@ -543,7 +548,8 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 
 					if endpoint.PolicyEnabled == tp.KubeArmorPolicyEnabled {
 						// enforce security policies
-						if !kl.ContainsElement(dm.SystemMonitor.UntrackedNamespaces, endpoint.NamespaceName) {
+						if !kl.ContainsElement(cfg.GlobalCfg.ConfigUntrackedNs.Load().([]string), endpoint.NamespaceName) || action == deleteEvent {
+							// we want to avoid new policies in untracked namespaces but deletion of the existing policies should be allowed
 							if dm.RuntimeEnforcer != nil {
 								dm.RuntimeEnforcer.UpdateSecurityPolicies(endpoint)
 							}
@@ -651,9 +657,7 @@ func (dm *KubeArmorDaemon) handlePodEvent(event string, obj *corev1.Pod) {
 	//get the owner , then check if that owner has owner if...do it recusivelt until you get the no owner
 
 	pod.Annotations = map[string]string{}
-	for k, v := range obj.Annotations {
-		pod.Annotations[k] = v
-	}
+	maps.Copy(pod.Annotations, obj.Annotations)
 
 	pod.Labels = map[string]string{}
 	for k, v := range obj.Labels {
@@ -768,36 +772,36 @@ func (dm *KubeArmorDaemon) handlePodEvent(event string, obj *corev1.Pod) {
 		updateAppArmor := false
 		dm.OwnerInfoLock.RLock()
 		if dm.OwnerInfo[pod.Metadata["podName"]].Name != "" {
-			if dm.OwnerInfo[pod.Metadata["podName"]].Ref == "StatefulSet" {
+			switch dm.OwnerInfo[pod.Metadata["podName"]].Ref {
+			case "StatefulSet":
 				statefulset, err := K8s.K8sClient.AppsV1().StatefulSets(pod.Metadata["namespaceName"]).Get(context.Background(), podOwnerName, metav1.GetOptions{})
 				if err == nil {
 					for _, c := range statefulset.Spec.Template.Spec.Containers {
 						containers = append(containers, c.Name)
 					}
 				}
-			} else if dm.OwnerInfo[pod.Metadata["podName"]].Ref == "ReplicaSet" {
+			case "ReplicaSet":
 				replica, err := K8s.K8sClient.AppsV1().ReplicaSets(pod.Metadata["namespaceName"]).Get(context.Background(), podOwnerName, metav1.GetOptions{})
 				if err == nil {
 					for _, c := range replica.Spec.Template.Spec.Containers {
 						containers = append(containers, c.Name)
 					}
 				}
-
-			} else if dm.OwnerInfo[pod.Metadata["podName"]].Ref == "DaemonSet" {
+			case "DaemonSet":
 				daemon, err := K8s.K8sClient.AppsV1().DaemonSets(pod.Metadata["namespaceName"]).Get(context.Background(), podOwnerName, metav1.GetOptions{})
 				if err == nil {
 					for _, c := range daemon.Spec.Template.Spec.Containers {
 						containers = append(containers, c.Name)
 					}
 				}
-			} else if dm.OwnerInfo[pod.Metadata["podName"]].Ref == "Deployment" {
+			case "Deployment":
 				deploy, err := K8s.K8sClient.AppsV1().Deployments(pod.Metadata["namespaceName"]).Get(context.Background(), podOwnerName, metav1.GetOptions{})
 				if err == nil {
 					for _, c := range deploy.Spec.Template.Spec.Containers {
 						containers = append(containers, c.Name)
 					}
 				}
-			} else if dm.OwnerInfo[pod.Metadata["podName"]].Ref == "Pod" {
+			case "Pod":
 				pod, err := K8s.K8sClient.CoreV1().Pods(pod.Metadata["namespaceName"]).Get(context.Background(), podOwnerName, metav1.GetOptions{})
 				if err == nil {
 					for _, c := range pod.Spec.Containers {
@@ -805,7 +809,7 @@ func (dm *KubeArmorDaemon) handlePodEvent(event string, obj *corev1.Pod) {
 					}
 				}
 
-			} else if dm.OwnerInfo[pod.Metadata["podName"]].Ref == "Job" {
+			case "Job":
 				job, err := K8s.K8sClient.BatchV1().Jobs(pod.Metadata["namespaceName"]).Get(context.Background(), podOwnerName, metav1.GetOptions{})
 				if err == nil {
 					for _, c := range job.Spec.Template.Spec.Containers {
@@ -813,7 +817,7 @@ func (dm *KubeArmorDaemon) handlePodEvent(event string, obj *corev1.Pod) {
 					}
 				}
 
-			} else if dm.OwnerInfo[pod.Metadata["podName"]].Ref == "CronJob" {
+			case "CronJob":
 				cronJob, err := K8s.K8sClient.BatchV1().CronJobs(pod.Metadata["namespaceName"]).Get(context.Background(), podOwnerName, metav1.GetOptions{})
 				if err == nil {
 					for _, c := range cronJob.Spec.JobTemplate.Spec.Template.Spec.Containers {
@@ -1163,7 +1167,8 @@ func (dm *KubeArmorDaemon) UpdateSecurityPolicy(action string, secPolicyType str
 
 					if dm.EndPoints[idx].PolicyEnabled == tp.KubeArmorPolicyEnabled {
 						// enforce security policies
-						if !kl.ContainsElement(dm.SystemMonitor.UntrackedNamespaces, dm.EndPoints[idx].NamespaceName) {
+						if !kl.ContainsElement(cfg.GlobalCfg.ConfigUntrackedNs.Load().([]string), dm.EndPoints[idx].NamespaceName) || action == deleteEvent {
+							// we want to avoid new policies in untracked namespaces but deletion of the existing policies should be allowed
 							if dm.RuntimeEnforcer != nil {
 								dm.RuntimeEnforcer.UpdateSecurityPolicies(dm.EndPoints[idx])
 							}
@@ -1236,7 +1241,8 @@ func (dm *KubeArmorDaemon) UpdateSecurityPolicy(action string, secPolicyType str
 
 					if dm.EndPoints[idx].PolicyEnabled == tp.KubeArmorPolicyEnabled {
 						// enforce security policies
-						if !kl.ContainsElement(dm.SystemMonitor.UntrackedNamespaces, dm.EndPoints[idx].NamespaceName) {
+						if !kl.ContainsElement(cfg.GlobalCfg.ConfigUntrackedNs.Load().([]string), dm.EndPoints[idx].NamespaceName) || action == deleteEvent {
+							// we want to avoid new policies in untracked namespaces but deletion of the existing policies should be allowed
 							if dm.RuntimeEnforcer != nil {
 								dm.RuntimeEnforcer.UpdateSecurityPolicies(dm.EndPoints[idx])
 							}
@@ -1257,7 +1263,8 @@ func (dm *KubeArmorDaemon) UpdateSecurityPolicy(action string, secPolicyType str
 func (dm *KubeArmorDaemon) CreateSecurityPolicy(policyType string, securityPolicy any) (secPolicy tp.SecurityPolicy, err error) {
 	var namespace, name string
 
-	if policyType == KubeArmorPolicy {
+	switch policyType {
+	case KubeArmorPolicy:
 		kubearmorPolicy := securityPolicy.(ksp.KubeArmorPolicy)
 
 		namespace = kubearmorPolicy.Namespace
@@ -1274,8 +1281,7 @@ func (dm *KubeArmorDaemon) CreateSecurityPolicy(policyType string, securityPolic
 			if k == "kubearmor.io/container.name" {
 				if len(v) > 2 {
 					containerArray := v[1 : len(v)-1]
-					containers := strings.Split(containerArray, ",")
-					for _, container := range containers {
+					for container := range strings.SplitSeq(containerArray, ",") {
 						if len(container) > 0 {
 							secPolicy.Spec.Selector.Containers = append(secPolicy.Spec.Selector.Containers, strings.TrimSpace(container))
 						}
@@ -1304,14 +1310,10 @@ func (dm *KubeArmorDaemon) CreateSecurityPolicy(policyType string, securityPolic
 		}
 
 		slices.Sort(secPolicy.Spec.Selector.Identities)
-		sort.Slice(secPolicy.Spec.Selector.MatchExpIdentities, func(i, j int) bool {
-			return secPolicy.Spec.Selector.MatchExpIdentities[i] < secPolicy.Spec.Selector.MatchExpIdentities[j]
-		})
-		sort.Slice(secPolicy.Spec.Selector.NonIdentities, func(i, j int) bool {
-			return secPolicy.Spec.Selector.NonIdentities[i] < secPolicy.Spec.Selector.NonIdentities[j]
-		})
+		slices.Sort(secPolicy.Spec.Selector.MatchExpIdentities)
+		slices.Sort(secPolicy.Spec.Selector.NonIdentities)
 
-	} else if policyType == KubeArmorClusterPolicy {
+	case KubeArmorClusterPolicy:
 		kubearmorClusterPolicy := securityPolicy.(ksp.KubeArmorClusterPolicy)
 
 		namespace = kubearmorClusterPolicy.Namespace
@@ -1326,7 +1328,8 @@ func (dm *KubeArmorDaemon) CreateSecurityPolicy(policyType string, securityPolic
 		excludedNamespaces := make(map[string]bool)
 
 		for _, matchExpression := range secPolicy.Spec.Selector.MatchExpressions {
-			if matchExpression.Key == NamespaceKey {
+			switch matchExpression.Key {
+			case NamespaceKey:
 				if matchExpression.Operator == InOperator {
 					hasNsInOperator = true
 					secPolicy.Spec.Selector.NamespaceList = append(secPolicy.Spec.Selector.NamespaceList, matchExpression.Values...)
@@ -1335,7 +1338,7 @@ func (dm *KubeArmorDaemon) CreateSecurityPolicy(policyType string, securityPolic
 						excludedNamespaces[value] = true
 					}
 				}
-			} else if matchExpression.Key == LabelKey {
+			case LabelKey:
 				if matchExpression.Operator == InOperator {
 					for _, label := range matchExpression.Values {
 						hasLabelInOperator = true
@@ -1349,12 +1352,8 @@ func (dm *KubeArmorDaemon) CreateSecurityPolicy(policyType string, securityPolic
 			}
 		}
 
-		sort.Slice(secPolicy.Spec.Selector.MatchExpIdentities, func(i, j int) bool {
-			return secPolicy.Spec.Selector.MatchExpIdentities[i] < secPolicy.Spec.Selector.MatchExpIdentities[j]
-		})
-		sort.Slice(secPolicy.Spec.Selector.NonIdentities, func(i, j int) bool {
-			return secPolicy.Spec.Selector.NonIdentities[i] < secPolicy.Spec.Selector.NonIdentities[j]
-		})
+		slices.Sort(secPolicy.Spec.Selector.MatchExpIdentities)
+		slices.Sort(secPolicy.Spec.Selector.NonIdentities)
 
 		// this logic will also work when selector is not defined, and policy rule will be applied across all the namespaces
 		if !hasNsInOperator {
@@ -2027,9 +2026,7 @@ func (dm *KubeArmorDaemon) ParseAndUpdateHostSecurityPolicy(event tp.K8sKubeArmo
 		secPolicy.Spec.NodeSelector.Identities = append(secPolicy.Spec.NodeSelector.Identities, k+"="+v)
 	}
 
-	sort.Slice(secPolicy.Spec.NodeSelector.Identities, func(i, j int) bool {
-		return secPolicy.Spec.NodeSelector.Identities[i] < secPolicy.Spec.NodeSelector.Identities[j]
-	})
+	slices.Sort(secPolicy.Spec.NodeSelector.Identities)
 
 	// add severities, tags, messages, and actions
 
@@ -2476,16 +2473,18 @@ func (dm *KubeArmorDaemon) ParseAndUpdateHostSecurityPolicy(event tp.K8sKubeArmo
 	dm.UpdateHostSecurityPolicies()
 
 	if !cfg.GlobalCfg.K8sEnv && (cfg.GlobalCfg.KVMAgent || cfg.GlobalCfg.HostPolicy) {
-		if event.Type == addEvent || event.Type == updateEvent {
+		switch event.Type {
+		case addEvent, updateEvent:
 			// backup HostSecurityPolicy to file
 			dm.backupKubeArmorHostPolicy(secPolicy)
-		} else if event.Type == deleteEvent {
+		case deleteEvent:
 			dm.removeBackUpPolicy(secPolicy.Metadata["policyName"])
 		}
 	}
-	if event.Type == addEvent {
+	switch event.Type {
+	case addEvent:
 		return pb.PolicyStatus_Applied
-	} else if event.Type == deleteEvent {
+	case deleteEvent:
 		return pb.PolicyStatus_Deleted
 	}
 	return pb.PolicyStatus_Modified
@@ -2614,7 +2613,7 @@ func (dm *KubeArmorDaemon) UpdateDefaultPostureWithCM(endPoint *tp.EndPoint, act
 		if dm.RuntimeEnforcer != nil {
 			if endPoint.PolicyEnabled == tp.KubeArmorPolicyEnabled {
 				// enforce security policies
-				if !kl.ContainsElement(dm.SystemMonitor.UntrackedNamespaces, endPoint.NamespaceName) {
+				if !kl.ContainsElement(cfg.GlobalCfg.ConfigUntrackedNs.Load().([]string), endPoint.NamespaceName) {
 					dm.RuntimeEnforcer.UpdateSecurityPolicies(*endPoint)
 				} else {
 					dm.Logger.Warnf("Policy cannot be enforced in untracked namespace %s", endPoint.NamespaceName)
@@ -2628,9 +2627,10 @@ func (dm *KubeArmorDaemon) UpdateDefaultPostureWithCM(endPoint *tp.EndPoint, act
 // returns default posture and a boolean value states, if annotation is set or not
 func validateDefaultPosture(key string, ns *corev1.Namespace, defaultPosture string) (string, bool) {
 	if posture, ok := ns.Annotations[key]; ok {
-		if posture == "audit" || posture == "Audit" {
+		switch strings.ToLower(posture) {
+		case "audit":
 			return "audit", true
-		} else if posture == "block" || posture == "Block" {
+		case "block":
 			return "block", true
 		}
 		// Invalid Annotation Value, Updating the value to global default
@@ -2688,7 +2688,7 @@ func (dm *KubeArmorDaemon) UpdateDefaultPosture(action string, namespace string,
 				if dm.RuntimeEnforcer != nil {
 					if endPoint.PolicyEnabled == tp.KubeArmorPolicyEnabled {
 						// enforce security policies
-						if !kl.ContainsElement(dm.SystemMonitor.UntrackedNamespaces, endPoint.NamespaceName) {
+						if !kl.ContainsElement(cfg.GlobalCfg.ConfigUntrackedNs.Load().([]string), endPoint.NamespaceName) {
 							dm.RuntimeEnforcer.UpdateSecurityPolicies(endPoint)
 						} else {
 							dm.Logger.Warnf("Policy cannot be enforced in untracked namespace %s", endPoint.NamespaceName)
@@ -2725,7 +2725,8 @@ func (dm *KubeArmorDaemon) UpdateVisibility(action string, namespace string, vis
 	dm.SystemMonitor.BpfMapLock.Lock()
 	defer dm.SystemMonitor.BpfMapLock.Unlock()
 
-	if action == addEvent || action == updateEvent {
+	switch action {
+	case addEvent, updateEvent:
 		if val, ok := dm.SystemMonitor.NamespacePidsMap[namespace]; ok {
 			val.Capability = visibility.Capabilities
 			val.File = visibility.File
@@ -2749,7 +2750,7 @@ func (dm *KubeArmorDaemon) UpdateVisibility(action string, namespace string, vis
 			}
 		}
 		dm.Logger.Printf("Namespace %s visibiliy configured %+v", namespace, visibility)
-	} else if action == deleteEvent {
+	case deleteEvent:
 		if val, ok := dm.SystemMonitor.NamespacePidsMap[namespace]; ok {
 			for _, nskey := range val.NsKeys {
 				dm.SystemMonitor.UpdateNsKeyMap(deleteEvent, nskey, tp.Visibility{})
@@ -2772,10 +2773,16 @@ func (dm *KubeArmorDaemon) updateVisibilityWithCM(cm *corev1.ConfigMap, _ string
 		return
 	}
 
-	// for each namespace if needed change the visibility
 	for _, ns := range nsList.Items {
-		// if namespace is annotated with visibility annotation don't update on config map change
-		if _, found := ns.Annotations[visibilityKey]; found || kl.ContainsElement(dm.SystemMonitor.UntrackedNamespaces, ns.Name) {
+		// 1. If namespace is untracked → explicitly remove visibility
+		if kl.ContainsElement(cfg.GlobalCfg.ConfigUntrackedNs.Load().([]string), ns.Name) {
+			//update visibility to empty for untracked namespaces
+			dm.UpdateVisibility(updateEvent, ns.Name, tp.Visibility{})
+			continue
+		}
+
+		// 2. If namespace has visibility annotation → skip CM-based updates
+		if _, found := ns.Annotations[visibilityKey]; found {
 			continue
 		}
 
@@ -2928,9 +2935,13 @@ func (dm *KubeArmorDaemon) WatchConfigMap() cache.InformerSynced {
 				cfg.GlobalCfg.HostVisibility = cm.Data[cfg.ConfigHostVisibility]
 				cfg.GlobalCfg.Visibility = cm.Data[cfg.ConfigVisibility]
 				cfg.GlobalCfg.Cluster = cm.Data[cfg.ConfigCluster]
+				cfg.GlobalCfg.DropResourceFromProcessLogs = (cm.Data[cfg.ConfigDropResourceFromProcessLogs] == "true")
 				dm.NodeLock.Lock()
 				dm.Node.ClusterName = cm.Data[cfg.ConfigCluster]
 				dm.NodeLock.Unlock()
+				if v, ok := cm.Data[cfg.ConfigUntrackedNs]; ok {
+					UpdateUntrackedNamespaces(v)
+				}
 				if _, ok := cm.Data[cfg.ConfigDefaultPostureLogs]; ok {
 					cfg.GlobalCfg.DefaultPostureLogs = (cm.Data[cfg.ConfigDefaultPostureLogs] == "true")
 				}
@@ -2971,9 +2982,14 @@ func (dm *KubeArmorDaemon) WatchConfigMap() cache.InformerSynced {
 						cfg.GlobalCfg.EnableIMA = enableIMA
 					}
 				}
+				dm.SystemMonitor.UpdateThrottlingConfig()
+				if _, ok := cm.Data[cfg.ConfigArgMatching]; ok {
+					cfg.GlobalCfg.MatchArgs, _ = strconv.ParseBool(cm.Data[cfg.ConfigArgMatching])
+					fmt.Println("Updated Match argr in configmap ", cfg.GlobalCfg.MatchArgs)
+				}
+				dm.SystemMonitor.UpdateMatchArgsConfig()
 				dm.UpdateIMA(cfg.GlobalCfg.EnableIMA)
 				dm.UpdateUSBDeviceHandler(cfg.GlobalCfg.USBDeviceHandler)
-				dm.SystemMonitor.UpdateThrottlingConfig()
 
 				dm.Logger.Printf("Current Global Posture is %v", currentGlobalPosture)
 				dm.UpdateGlobalPosture(globalPosture)
@@ -2984,11 +3000,13 @@ func (dm *KubeArmorDaemon) WatchConfigMap() cache.InformerSynced {
 				dm.updateVisibilityWithCM(cm, addEvent)
 			}
 		},
-		UpdateFunc: func(_, new any) {
-			if cm, ok := new.(*corev1.ConfigMap); ok && cm.Namespace == cmNS {
+		UpdateFunc: func(oldObj, newObj any) {
+			if cm, ok := newObj.(*corev1.ConfigMap); ok && cm.Namespace == cmNS {
 				cfg.GlobalCfg.HostVisibility = cm.Data[cfg.ConfigHostVisibility]
 				cfg.GlobalCfg.Visibility = cm.Data[cfg.ConfigVisibility]
+
 				cfg.GlobalCfg.Cluster = cm.Data[cfg.ConfigCluster]
+				cfg.GlobalCfg.DropResourceFromProcessLogs = (cm.Data[cfg.ConfigDropResourceFromProcessLogs] == "true")
 				dm.Node.ClusterName = cm.Data[cfg.ConfigCluster]
 				if _, ok := cm.Data[cfg.ConfigDefaultPostureLogs]; ok {
 					cfg.GlobalCfg.DefaultPostureLogs = (cm.Data[cfg.ConfigDefaultPostureLogs] == "true")
@@ -3008,7 +3026,13 @@ func (dm *KubeArmorDaemon) WatchConfigMap() cache.InformerSynced {
 
 				// update default posture for endpoints
 				dm.updatEndpointsWithCM(cm, updateEvent)
-				// update visibility for namespaces
+
+				// forward untracked namespaces to SystemMonitor
+				if v, ok := cm.Data[cfg.ConfigUntrackedNs]; ok {
+					UpdateUntrackedNamespaces(v)
+				}
+
+				// visibility updates are already handled here
 				dm.updateVisibilityWithCM(cm, updateEvent)
 
 				if _, ok := cm.Data[cfg.ConfigAlertThrottling]; ok {
@@ -3036,6 +3060,11 @@ func (dm *KubeArmorDaemon) WatchConfigMap() cache.InformerSynced {
 						cfg.GlobalCfg.EnableIMA = enableIMA
 					}
 				}
+				if _, ok := cm.Data[cfg.ConfigArgMatching]; ok {
+					cfg.GlobalCfg.MatchArgs, _ = strconv.ParseBool(cm.Data[cfg.ConfigArgMatching])
+					fmt.Println("Updated Match argr in configmap ", cfg.GlobalCfg.MatchArgs)
+				}
+				dm.SystemMonitor.UpdateMatchArgsConfig()
 				dm.UpdateIMA(cfg.GlobalCfg.EnableIMA)
 				dm.UpdateUSBDeviceHandler(cfg.GlobalCfg.USBDeviceHandler)
 			}
@@ -3104,4 +3133,17 @@ func (dm *KubeArmorDaemon) GetConfigMapNS() string {
 		return "kubearmor"
 	}
 	return envNamespace
+}
+
+// UpdateUntrackedNamespaces updates the runtime untracked namespaces list.
+func UpdateUntrackedNamespaces(v string) {
+	parts := strings.Split(v, ",")
+
+	namespaces := make([]string, 0, len(parts))
+	for _, ns := range parts {
+		if ns = strings.TrimSpace(ns); ns != "" {
+			namespaces = append(namespaces, ns)
+		}
+	}
+	cfg.GlobalCfg.ConfigUntrackedNs.Store(namespaces)
 }

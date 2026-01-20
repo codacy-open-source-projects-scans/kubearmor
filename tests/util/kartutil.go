@@ -43,15 +43,16 @@ var kcClient *kc.SecurityV1Client
 
 // ConfigMapData hosts the structure which is used to configure Config Map Data
 type ConfigMapData struct {
-	GRPC                       string
-	Visibility                 string
-	Cluster                    string
-	DefaultFilePosture         string
-	DefaultCapabilitiesPosture string
-	DefaultNetworkPosture      string
-	AlertThrottling            string
-	MaxAlertPerSec             string
-	ThrottleSec                string
+	GRPC                        string
+	Visibility                  string
+	Cluster                     string
+	DefaultFilePosture          string
+	DefaultCapabilitiesPosture  string
+	DefaultNetworkPosture       string
+	AlertThrottling             string
+	MaxAlertPerSec              string
+	ThrottleSec                 string
+	DropResourceFromProcessLogs string
 }
 
 // GetK8sClient function return instance of k8s client
@@ -110,6 +111,7 @@ func NewDefaultConfigMapData() *ConfigMapData {
 	data.AlertThrottling = "false"
 	data.MaxAlertPerSec = "10"
 	data.ThrottleSec = "30"
+	data.DropResourceFromProcessLogs = "false"
 
 	return data
 }
@@ -129,15 +131,16 @@ func (data *ConfigMapData) CreateKAConfigMap() error {
 			},
 		},
 		Data: map[string]string{
-			"gRPC":                       data.GRPC,
-			"cluster":                    data.Cluster,
-			"visibility":                 data.Visibility,
-			"defaultFilePosture":         data.DefaultFilePosture,
-			"defaultCapabilitiesPosture": data.DefaultCapabilitiesPosture,
-			"defaultNetworkPosture":      data.DefaultNetworkPosture,
-			"alertThrottling":            data.AlertThrottling,
-			"maxAlertPerSec":             data.MaxAlertPerSec,
-			"throttleSec":                data.ThrottleSec,
+			"gRPC":                        data.GRPC,
+			"cluster":                     data.Cluster,
+			"visibility":                  data.Visibility,
+			"defaultFilePosture":          data.DefaultFilePosture,
+			"defaultCapabilitiesPosture":  data.DefaultCapabilitiesPosture,
+			"defaultNetworkPosture":       data.DefaultNetworkPosture,
+			"alertThrottling":             data.AlertThrottling,
+			"maxAlertPerSec":              data.MaxAlertPerSec,
+			"throttleSec":                 data.ThrottleSec,
+			"dropResourceFromProcessLogs": data.DropResourceFromProcessLogs,
 		},
 	}
 
@@ -230,7 +233,7 @@ func K8sDeploymentCheck(depname string, ns string, timeout time.Duration) error 
 }
 
 func AnnotationsMatch(pod corev1.Pod, ants []string) bool {
-	if ants == nil || len(ants) <= 0 {
+	if len(ants) <= 0 {
 		return true
 	}
 	for _, ant := range ants {
@@ -397,8 +400,7 @@ func KspDeleteAll() {
 	if err != nil {
 		return
 	}
-	lines := strings.Split(sout, "\n")
-	for _, line := range lines {
+	for line := range strings.SplitSeq(sout, "\n") {
 		if line == "" {
 			continue
 		}
@@ -493,9 +495,8 @@ func K8sApplyFile(fileName string) error {
 
 	// multiple yaml files seperate by ---
 	fileAsString := string(f[:])
-	sepYamlfiles := strings.Split(fileAsString, "---")
 
-	for _, f := range sepYamlfiles {
+	for f := range strings.SplitSeq(fileAsString, "---") {
 		if f == "\n" || f == "" {
 			// ignore empty cases
 			continue

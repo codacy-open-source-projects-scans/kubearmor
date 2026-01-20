@@ -126,6 +126,10 @@ type KubeArmorConfigSpec struct {
 	EnableNRI bool `json:"enableNRI,omitempty"`
 
 	ControllerPort int `json:"controllerPort,omitempty"`
+
+	DropResourceFromProcessLogs bool `json:"dropResourceFromProcessLogs,omitempty"`
+
+	MatchArgs bool `json:"matchArgs,omitempty"`
 }
 
 // KubeArmorConfigStatus defines the observed state of KubeArmorConfig
