@@ -43,5 +43,8 @@ go.work.sum
 hook
 deployHook
 
-# alow hook directory
+# allow hook directory
 !**/hook/
+
+# personal scratchpad for incubation reapplication work — not for upstream
+MEMORY.md

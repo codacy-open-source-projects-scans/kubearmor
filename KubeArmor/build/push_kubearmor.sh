@@ -8,8 +8,6 @@
 
 [[ "$STABLE_VERSION" != "" ]] && STABEL_LABEL="--label stabel-version=$STABLE_VERSION"
 
-UBIREPO="kubearmor/kubearmor-ubi"
-
 # set LABEL
 unset LABEL
 [[ "$GITHUB_SHA" != "" ]] && LABEL="--label github_sha=$GITHUB_SHA"
@@ -62,16 +60,9 @@ echo "[PASSED] Pushed $REPO:$VERSION"
 
 # push $REPO-init
 echo "[INFO] Pushing $REPO-init:$VERSION"
-cd $ARMOR_HOME/..; docker buildx build --metadata-file kubearmor-init.json --platform $PLATFORMS --build-arg VERSION=$VERSION -t $REPO-init:$VERSION -f Dockerfile.init $BUILD_MODE $LABEL $STABEL_LABEL .
+cd $ARMOR_HOME/..; docker buildx build --metadata-file kubearmor-init.json --platform $PLATFORMS --target kubearmor-init --build-arg VERSION=$VERSION -t $REPO-init:$VERSION -f Dockerfile.init $BUILD_MODE $LABEL $STABEL_LABEL .
 
 [[ $? -ne 0 ]] && echo "[FAILED] Failed to push $REPO-init:$VERSION" && exit 1
 echo "[PASSED] Pushed $REPO-init:$VERSION"
-
-# push $UBIREPO
-echo "[INFO] Pushing $UBIREPO:$VERSION"
-cd $ARMOR_HOME/..; docker buildx build --metadata-file kubearmor-ubi.json --platform $PLATFORMS --build-arg VERSION=$VERSION --target kubearmor-ubi -t $UBIREPO:$VERSION -f Dockerfile $BUILD_MODE $LABEL $STABEL_LABEL .
-
-[[ $? -ne 0 ]] && echo "[FAILED] Failed to push $UBIREPO:$VERSION" && exit 1
-echo "[PASSED] Pushed $UBIREPO:$VERSION"
 
 exit 0

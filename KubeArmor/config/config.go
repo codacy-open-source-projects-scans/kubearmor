@@ -21,9 +21,10 @@ type KubearmorConfig struct {
 	Host    string // Host name to use for feeds
 
 	GRPC              string // gRPC Port to use
+	GRPCHealthPort    string // gRPC Health Port to use
 	TLSEnabled        bool   // enable tls
 	TLSCertPath       string // tls certification path
-	TLSCertProvider   string // tls certficate provider
+	TLSCertProvider   string // tls certificate provider
 	LogPath           string // Log file to use
 	SELinuxProfileDir string // Directory to store SELinux profiles
 	CRISocket         string // Container runtime to use
@@ -79,6 +80,9 @@ type KubearmorConfig struct {
 	MatchArgs bool // enable argument rules for policy
 
 	NetworkPolicyEnforcer bool // enable network policy enforcement
+
+	EnablePprof bool   // enable pprof profiling server
+	PprofAddr   string // address for pprof profiling server
 }
 
 // GlobalCfg Global configuration for Kubearmor
@@ -91,6 +95,7 @@ const (
 	ConfigCluster                        string = "cluster"
 	ConfigHost                           string = "host"
 	ConfigGRPC                           string = "gRPC"
+	ConfigGRPCHealthPort                 string = "gRPCHealthPort"
 	ConfigTLSCertPath                    string = "tlsCertPath"
 	ConfigTLSCertProvider                string = "tlsCertProvider"
 	SelfCertProvider                     string = "self"
@@ -136,6 +141,8 @@ const (
 	ConfigUSBDeviceHandler               string = "enableUSBDeviceHandler"
 	ConfigArgMatching                    string = "matchArgs"
 	ConfigNetworkPolicyEnforcer          string = "enableNetworkPolicyEnforcer"
+	ConfigEnablePprof                    string = "enablePprof"
+	ConfigPprofAddr                      string = "pprofAddr"
 )
 
 func readCmdLineParams() {
@@ -144,6 +151,7 @@ func readCmdLineParams() {
 	hostStr := flag.String(ConfigHost, hostname, "host name")
 
 	grpcStr := flag.String(ConfigGRPC, "32767", "gRPC port number")
+	grpcHealthStr := flag.String(ConfigGRPCHealthPort, "32766", "gRPC health check port number")
 	tlsEnabled := flag.Bool(ConfigTLS, false, "enable tls for secure grpc connection")
 	tlsCertsStr := flag.String(ConfigTLSCertPath, "/var/lib/kubearmor/tls", "path to tls ca certificate files ca.crt, ca.crt")
 	tlsCertProvider := flag.String(ConfigTLSCertProvider, "self", "source of certificate {self|external}, self: create certificate dynamically, external: provided by some external entity")
@@ -162,7 +170,7 @@ func readCmdLineParams() {
 	kvmAgentB := flag.Bool(ConfigKubearmorVM, false, "enabling KubeArmorVM")
 	k8sEnvB := flag.Bool(ConfigK8sEnv, true, "is k8s env?")
 
-	debugB := flag.Bool(ConfigDebug, false, "Enable/Disable pushing KubeArmor debug logs over gRPC. NOTE: Set environment DEBUG=true to configure stdout debug logging")
+	debugB := flag.Bool(ConfigDebug, false, "Enable/Disable pushing KubeArmor debug logs over gRPC. NOTE: Set environment LOG_LEVEL=debug to configure stdout debug logging")
 
 	defaultFilePosture := flag.String(ConfigDefaultFilePosture, "audit", "configuring default enforcement action in global file context {allow|audit|block}")
 	defaultNetworkPosture := flag.String(ConfigDefaultNetworkPosture, "audit", "configuring default enforcement action in global network context {allow|audit|block}")
@@ -211,6 +219,9 @@ func readCmdLineParams() {
 
 	networkPolicyEnforcer := flag.Bool(ConfigNetworkPolicyEnforcer, true, "Enable network policy enforcement")
 
+	enablePprof := flag.Bool(ConfigEnablePprof, false, "enable pprof profiling server")
+	pprofAddr := flag.String(ConfigPprofAddr, "localhost:6060", "address for pprof profiling server")
+
 	flags := []string{}
 	flag.VisitAll(func(f *flag.Flag) {
 		kv := fmt.Sprintf("%s:%v", f.Name, f.Value)
@@ -224,6 +235,7 @@ func readCmdLineParams() {
 	viper.SetDefault(ConfigHost, *hostStr)
 
 	viper.SetDefault(ConfigGRPC, *grpcStr)
+	viper.SetDefault(ConfigGRPCHealthPort, *grpcHealthStr)
 	viper.SetDefault(ConfigTLS, *tlsEnabled)
 	viper.SetDefault(ConfigTLSCertPath, *tlsCertsStr)
 	viper.SetDefault(ConfigTLSCertProvider, *tlsCertProvider)
@@ -292,6 +304,9 @@ func readCmdLineParams() {
 	viper.SetDefault(ConfigArgMatching, *matchArgs)
 
 	viper.SetDefault(ConfigNetworkPolicyEnforcer, *networkPolicyEnforcer)
+
+	viper.SetDefault(ConfigEnablePprof, *enablePprof)
+	viper.SetDefault(ConfigPprofAddr, *pprofAddr)
 }
 
 // LoadConfig Load configuration
@@ -327,6 +342,7 @@ func LoadConfig() error {
 	}
 
 	GlobalCfg.GRPC = viper.GetString(ConfigGRPC)
+	GlobalCfg.GRPCHealthPort = viper.GetString(ConfigGRPCHealthPort)
 	GlobalCfg.TLSEnabled = viper.GetBool(ConfigTLS)
 	GlobalCfg.TLSCertPath = viper.GetString(ConfigTLSCertPath)
 	GlobalCfg.TLSCertProvider = viper.GetString(ConfigTLSCertProvider)
@@ -387,6 +403,9 @@ func LoadConfig() error {
 	GlobalCfg.SELinuxProfileDir = viper.GetString(ConfigSELinuxProfileDir)
 
 	GlobalCfg.NetworkPolicyEnforcer = viper.GetBool(ConfigNetworkPolicyEnforcer)
+
+	GlobalCfg.EnablePprof = viper.GetBool(ConfigEnablePprof)
+	GlobalCfg.PprofAddr = viper.GetString(ConfigPprofAddr)
 
 	LoadDynamicConfig()
 

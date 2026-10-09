@@ -65,6 +65,9 @@ const (
 	DropAlert = 0
 
 	UDPSendMsg = 10000
+	UDPSendSkb = 10001
+
+	SocketSendMsg = 465
 )
 
 var syscalls = map[int32]string{
@@ -419,4 +422,5 @@ var syscalls = map[int32]string{
 	462: "SOCKET_CONNECT",
 	463: "SOCKET_ACCEPT",
 	464: "CAPABLE",
+	465: "SOCKET_SENDMSG",
 }

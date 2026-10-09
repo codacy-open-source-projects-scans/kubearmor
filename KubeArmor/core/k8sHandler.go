@@ -223,7 +223,7 @@ func (kh *K8sHandler) PatchResourceWithAppArmorAnnotations(namespaceName, deploy
 			return err
 		}
 	case "Pod":
-		// this condition wont be triggered, handled by controller
+		// this condition won't be triggered, handled by controller
 		return nil
 
 	}
@@ -388,75 +388,6 @@ func (kh *K8sHandler) CheckCustomResourceDefinition(resourceName string) error {
 	}
 
 	return fmt.Errorf("custom resource definition '%s' not found", resourceName)
-}
-
-// WatchK8sSecurityPolicies Function
-func (kh *K8sHandler) WatchK8sSecurityPolicies() *http.Response {
-	if !kl.IsK8sEnv() { // not Kubernetes
-		return nil
-	}
-
-	URL := kh.K8sHost + "/apis/security.kubearmor.com/v1/kubearmorpolicies?watch=true"
-
-	req, err := http.NewRequest("GET", URL, nil)
-	if err != nil {
-		return nil
-	}
-
-	req.Header.Add("Content-Type", "application/json")
-
-	resp, err := kh.WatchClient.Do(req) // #nosec G704 -- safe request, sent only to trusted Kubernetes API server
-	if err != nil {
-		return nil
-	}
-
-	return resp
-}
-
-// WatchK8sHostSecurityPolicies Function
-func (kh *K8sHandler) WatchK8sHostSecurityPolicies() *http.Response {
-	if !kl.IsK8sEnv() { // not Kubernetes
-		return nil
-	}
-
-	URL := kh.K8sHost + "/apis/security.kubearmor.com/v1/kubearmorhostpolicies?watch=true"
-
-	req, err := http.NewRequest("GET", URL, nil)
-	if err != nil {
-		return nil
-	}
-
-	req.Header.Add("Content-Type", "application/json")
-
-	resp, err := kh.WatchClient.Do(req) // #nosec G704 -- safe request, sent only to trusted Kubernetes API server
-	if err != nil {
-		return nil
-	}
-
-	return resp
-}
-
-// WatchK8sNetworkSecurityPolicies Function
-func (kh *K8sHandler) WatchK8sNetworkSecurityPolicies() *http.Response {
-	if !kl.IsK8sEnv() { // not Kubernetes
-		return nil
-	}
-
-	URL := kh.K8sHost + "/apis/security.kubearmor.com/v1/kubearmornetworkpolicies?watch=true"
-
-	req, err := http.NewRequest("GET", URL, nil)
-	if err != nil {
-		return nil
-	}
-
-	req.Header.Add("Content-Type", "application/json")
-
-	resp, err := kh.WatchClient.Do(req) // #nosec G704
-	if err != nil {
-		return nil
-	}
-
-	return resp
 }
 
 // this function get the owner details of a pod

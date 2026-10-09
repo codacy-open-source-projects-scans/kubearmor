@@ -3,11 +3,11 @@
 # Copyright 2026 Authors of KubeArmor
 
 echo "Installing addlicense tool"
-go install github.com/google/addlicense@latest
+go install github.com/google/addlicense@v1.2.0
 
 if [ -z $1 ]; then
     GIT_ROOT=$(git rev-parse --show-toplevel)
-    echo "No Arguement Supplied, Checking and Fixing all files from project root"
+    echo "No Argument Supplied, Checking and Fixing all files from project root"
     addlicense -f license.header -v $GIT_ROOT/**/*.go $GIT_ROOT/**/*.sh
     echo "Done"
 else

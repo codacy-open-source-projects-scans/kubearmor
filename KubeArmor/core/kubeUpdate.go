@@ -5,9 +5,7 @@ package core
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"maps"
 	"os"
 	"reflect"
@@ -229,6 +227,8 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 
 		slices.Sort(newPoint.Identities)
 
+		newPoint.PodIP = pod.PodIP
+
 		// update policy flag
 		switch pod.Annotations["kubearmor-policy"] {
 		case "enabled":
@@ -408,6 +408,8 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 
 			slices.Sort(newEndPoint.Identities)
 
+			newEndPoint.PodIP = pod.PodIP
+
 			// update policy flag
 			switch pod.Annotations["kubearmor-policy"] {
 			case "enabled":
@@ -579,6 +581,11 @@ func (dm *KubeArmorDaemon) UpdateEndPointWithPod(action string, pod tp.K8sPod) {
 		}
 		dm.EndPointsLock.Unlock()
 	}
+
+	if cfg.GlobalCfg.NetworkPolicyEnforcer && dm.NetworkPolicyEnforcer != nil {
+		// enforce network security policies
+		dm.UpdateNetworkSecurityPolicies()
+	}
 }
 
 // HandleUnknownNamespaceNsMap Function
@@ -696,6 +703,9 @@ func (dm *KubeArmorDaemon) handlePodEvent(event string, obj *corev1.Pod) {
 			}
 		}
 	}
+
+	// Store pod IP from Kubernetes status
+	pod.PodIP = obj.Status.PodIP
 
 	// == Policy == //
 
@@ -1276,7 +1286,6 @@ func (dm *KubeArmorDaemon) UpdateSecurityPolicy(action string, secPolicyType str
 // CreateSecurityPolicy - creates `KubeArmorPolicy` & `KubeArmorClusterPolicy` object from crd
 func (dm *KubeArmorDaemon) CreateSecurityPolicy(policyType string, securityPolicy any) (secPolicy tp.SecurityPolicy, err error) {
 	var namespace, name string
-
 	switch policyType {
 	case KubeArmorPolicy:
 		kubearmorPolicy := securityPolicy.(ksp.KubeArmorPolicy)
@@ -1390,6 +1399,7 @@ func (dm *KubeArmorDaemon) CreateSecurityPolicy(policyType string, securityPolic
 	secPolicy.Metadata["policyName"] = name
 
 	kl.ObjCommaExpandFirstDupOthers(&secPolicy.Spec.Network.MatchProtocols)
+	kl.ObjCommaExpandFirstDupOthers(&secPolicy.Spec.Network.MatchDNSQueries)
 	kl.ObjCommaExpandFirstDupOthers(&secPolicy.Spec.Capabilities.MatchCapabilities)
 
 	switch secPolicy.Spec.Action {
@@ -1657,6 +1667,42 @@ func (dm *KubeArmorDaemon) CreateSecurityPolicy(policyType string, securityPolic
 		}
 	}
 
+	if len(secPolicy.Spec.Network.MatchDNSQueries) > 0 {
+		for idx, dns := range secPolicy.Spec.Network.MatchDNSQueries {
+			if dns.Severity == 0 {
+				if secPolicy.Spec.Network.Severity != 0 {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Severity = secPolicy.Spec.Network.Severity
+				} else {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(dns.Tags) == 0 {
+				if len(secPolicy.Spec.Network.Tags) > 0 {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Tags = secPolicy.Spec.Network.Tags
+				} else {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(dns.Message) == 0 {
+				if len(secPolicy.Spec.Network.Message) > 0 {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Message = secPolicy.Spec.Network.Message
+				} else {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(dns.Action) == 0 {
+				if len(secPolicy.Spec.Network.Action) > 0 {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Action = secPolicy.Spec.Network.Action
+				} else {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
 	if len(secPolicy.Spec.Capabilities.MatchCapabilities) > 0 {
 		for idx, cap := range secPolicy.Spec.Capabilities.MatchCapabilities {
 			if cap.Severity == 0 {
@@ -1753,14 +1799,600 @@ func (dm *KubeArmorDaemon) CreateSecurityPolicy(policyType string, securityPolic
 	return
 }
 
+// CreateHostSecurityPolicy - creates `KubeArmorHostPolicy` object from crd
+func (dm *KubeArmorDaemon) CreateHostSecurityPolicy(securityPolicy any) (secPolicy tp.HostSecurityPolicy, err error) {
+	var name string
+	kubearmorHostPolicy := securityPolicy.(ksp.KubeArmorHostPolicy)
+
+	name = kubearmorHostPolicy.Name
+	if err := kl.Clone(kubearmorHostPolicy.Spec, &secPolicy.Spec); err != nil {
+		dm.Logger.Errf("Failed to clone a spec (%s)", err.Error())
+		return tp.HostSecurityPolicy{}, err
+	}
+
+	// Host policies use NodeSelector to target the specific host/node
+	for k, v := range secPolicy.Spec.NodeSelector.MatchLabels {
+		secPolicy.Spec.NodeSelector.Identities = append(secPolicy.Spec.NodeSelector.Identities, k+"="+v)
+	}
+
+	slices.Sort(secPolicy.Spec.NodeSelector.Identities)
+
+	secPolicy.Metadata = map[string]string{}
+	secPolicy.Metadata["policyName"] = name
+
+	kl.ObjCommaExpandFirstDupOthers(&secPolicy.Spec.Network.MatchProtocols)
+	kl.ObjCommaExpandFirstDupOthers(&secPolicy.Spec.Network.MatchDNSQueries)
+	kl.ObjCommaExpandFirstDupOthers(&secPolicy.Spec.Capabilities.MatchCapabilities)
+
+	switch secPolicy.Spec.Action {
+	case "allow":
+		secPolicy.Spec.Action = "Allow"
+	case "audit":
+		secPolicy.Spec.Action = "Audit"
+	case "block":
+		secPolicy.Spec.Action = "Block"
+	case "":
+		secPolicy.Spec.Action = "Block" // by default
+	}
+
+	// add severities, tags, messages, and actions
+
+	if len(secPolicy.Spec.Process.MatchPaths) > 0 {
+		for idx, path := range secPolicy.Spec.Process.MatchPaths {
+			if path.Severity == 0 {
+				if secPolicy.Spec.Process.Severity != 0 {
+					secPolicy.Spec.Process.MatchPaths[idx].Severity = secPolicy.Spec.Process.Severity
+				} else {
+					secPolicy.Spec.Process.MatchPaths[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(path.Tags) == 0 {
+				if len(secPolicy.Spec.Process.Tags) > 0 {
+					secPolicy.Spec.Process.MatchPaths[idx].Tags = secPolicy.Spec.Process.Tags
+				} else {
+					secPolicy.Spec.Process.MatchPaths[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(path.Message) == 0 {
+				if len(secPolicy.Spec.Process.Message) > 0 {
+					secPolicy.Spec.Process.MatchPaths[idx].Message = secPolicy.Spec.Process.Message
+				} else {
+					secPolicy.Spec.Process.MatchPaths[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(path.Action) == 0 {
+				if len(secPolicy.Spec.Process.Action) > 0 {
+					secPolicy.Spec.Process.MatchPaths[idx].Action = secPolicy.Spec.Process.Action
+				} else {
+					secPolicy.Spec.Process.MatchPaths[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
+	if len(secPolicy.Spec.Process.MatchDirectories) > 0 {
+		for idx, dir := range secPolicy.Spec.Process.MatchDirectories {
+			if dir.Severity == 0 {
+				if secPolicy.Spec.Process.Severity != 0 {
+					secPolicy.Spec.Process.MatchDirectories[idx].Severity = secPolicy.Spec.Process.Severity
+				} else {
+					secPolicy.Spec.Process.MatchDirectories[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(dir.Tags) == 0 {
+				if len(secPolicy.Spec.Process.Tags) > 0 {
+					secPolicy.Spec.Process.MatchDirectories[idx].Tags = secPolicy.Spec.Process.Tags
+				} else {
+					secPolicy.Spec.Process.MatchDirectories[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(dir.Message) == 0 {
+				if len(secPolicy.Spec.Process.Message) > 0 {
+					secPolicy.Spec.Process.MatchDirectories[idx].Message = secPolicy.Spec.Process.Message
+				} else {
+					secPolicy.Spec.Process.MatchDirectories[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(dir.Action) == 0 {
+				if len(secPolicy.Spec.Process.Action) > 0 {
+					secPolicy.Spec.Process.MatchDirectories[idx].Action = secPolicy.Spec.Process.Action
+				} else {
+					secPolicy.Spec.Process.MatchDirectories[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
+	if len(secPolicy.Spec.Process.MatchPatterns) > 0 {
+		for idx, pat := range secPolicy.Spec.Process.MatchPatterns {
+			if pat.Severity == 0 {
+				if secPolicy.Spec.Process.Severity != 0 {
+					secPolicy.Spec.Process.MatchPatterns[idx].Severity = secPolicy.Spec.Process.Severity
+				} else {
+					secPolicy.Spec.Process.MatchPatterns[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(pat.Tags) == 0 {
+				if len(secPolicy.Spec.Process.Tags) > 0 {
+					secPolicy.Spec.Process.MatchPatterns[idx].Tags = secPolicy.Spec.Process.Tags
+				} else {
+					secPolicy.Spec.Process.MatchPatterns[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(pat.Message) == 0 {
+				if len(secPolicy.Spec.Process.Message) > 0 {
+					secPolicy.Spec.Process.MatchPatterns[idx].Message = secPolicy.Spec.Process.Message
+				} else {
+					secPolicy.Spec.Process.MatchPatterns[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(pat.Action) == 0 {
+				if len(secPolicy.Spec.Process.Action) > 0 {
+					secPolicy.Spec.Process.MatchPatterns[idx].Action = secPolicy.Spec.Process.Action
+				} else {
+					secPolicy.Spec.Process.MatchPatterns[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
+	if len(secPolicy.Spec.File.MatchPaths) > 0 {
+		for idx, path := range secPolicy.Spec.File.MatchPaths {
+			if path.Severity == 0 {
+				if secPolicy.Spec.File.Severity != 0 {
+					secPolicy.Spec.File.MatchPaths[idx].Severity = secPolicy.Spec.File.Severity
+				} else {
+					secPolicy.Spec.File.MatchPaths[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(path.Tags) == 0 {
+				if len(secPolicy.Spec.File.Tags) > 0 {
+					secPolicy.Spec.File.MatchPaths[idx].Tags = secPolicy.Spec.File.Tags
+				} else {
+					secPolicy.Spec.File.MatchPaths[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(path.Message) == 0 {
+				if len(secPolicy.Spec.File.Message) > 0 {
+					secPolicy.Spec.File.MatchPaths[idx].Message = secPolicy.Spec.File.Message
+				} else {
+					secPolicy.Spec.File.MatchPaths[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(path.Action) == 0 {
+				if len(secPolicy.Spec.File.Action) > 0 {
+					secPolicy.Spec.File.MatchPaths[idx].Action = secPolicy.Spec.File.Action
+				} else {
+					secPolicy.Spec.File.MatchPaths[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
+	if len(secPolicy.Spec.File.MatchDirectories) > 0 {
+		for idx, dir := range secPolicy.Spec.File.MatchDirectories {
+			if dir.Severity == 0 {
+				if secPolicy.Spec.File.Severity != 0 {
+					secPolicy.Spec.File.MatchDirectories[idx].Severity = secPolicy.Spec.File.Severity
+				} else {
+					secPolicy.Spec.File.MatchDirectories[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(dir.Tags) == 0 {
+				if len(secPolicy.Spec.File.Tags) > 0 {
+					secPolicy.Spec.File.MatchDirectories[idx].Tags = secPolicy.Spec.File.Tags
+				} else {
+					secPolicy.Spec.File.MatchDirectories[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(dir.Message) == 0 {
+				if len(secPolicy.Spec.File.Message) > 0 {
+					secPolicy.Spec.File.MatchDirectories[idx].Message = secPolicy.Spec.File.Message
+				} else {
+					secPolicy.Spec.File.MatchDirectories[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(dir.Action) == 0 {
+				if len(secPolicy.Spec.File.Action) > 0 {
+					secPolicy.Spec.File.MatchDirectories[idx].Action = secPolicy.Spec.File.Action
+				} else {
+					secPolicy.Spec.File.MatchDirectories[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
+	if len(secPolicy.Spec.File.MatchPatterns) > 0 {
+		for idx, pat := range secPolicy.Spec.File.MatchPatterns {
+			if pat.Severity == 0 {
+				if secPolicy.Spec.File.Severity != 0 {
+					secPolicy.Spec.File.MatchPatterns[idx].Severity = secPolicy.Spec.File.Severity
+				} else {
+					secPolicy.Spec.File.MatchPatterns[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(pat.Tags) == 0 {
+				if len(secPolicy.Spec.File.Tags) > 0 {
+					secPolicy.Spec.File.MatchPatterns[idx].Tags = secPolicy.Spec.File.Tags
+				} else {
+					secPolicy.Spec.File.MatchPatterns[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(pat.Message) == 0 {
+				if len(secPolicy.Spec.File.Message) > 0 {
+					secPolicy.Spec.File.MatchPatterns[idx].Message = secPolicy.Spec.File.Message
+				} else {
+					secPolicy.Spec.File.MatchPatterns[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(pat.Action) == 0 {
+				if len(secPolicy.Spec.File.Action) > 0 {
+					secPolicy.Spec.File.MatchPatterns[idx].Action = secPolicy.Spec.File.Action
+				} else {
+					secPolicy.Spec.File.MatchPatterns[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
+	if len(secPolicy.Spec.Network.MatchProtocols) > 0 {
+		for idx, proto := range secPolicy.Spec.Network.MatchProtocols {
+			if proto.Severity == 0 {
+				if secPolicy.Spec.Network.Severity != 0 {
+					secPolicy.Spec.Network.MatchProtocols[idx].Severity = secPolicy.Spec.Network.Severity
+				} else {
+					secPolicy.Spec.Network.MatchProtocols[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(proto.Tags) == 0 {
+				if len(secPolicy.Spec.Network.Tags) > 0 {
+					secPolicy.Spec.Network.MatchProtocols[idx].Tags = secPolicy.Spec.Network.Tags
+				} else {
+					secPolicy.Spec.Network.MatchProtocols[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(proto.Message) == 0 {
+				if len(secPolicy.Spec.Network.Message) > 0 {
+					secPolicy.Spec.Network.MatchProtocols[idx].Message = secPolicy.Spec.Network.Message
+				} else {
+					secPolicy.Spec.Network.MatchProtocols[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(proto.Action) == 0 {
+				if len(secPolicy.Spec.Network.Action) > 0 {
+					secPolicy.Spec.Network.MatchProtocols[idx].Action = secPolicy.Spec.Network.Action
+				} else {
+					secPolicy.Spec.Network.MatchProtocols[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
+	if len(secPolicy.Spec.Network.MatchDNSQueries) > 0 {
+		for idx, dns := range secPolicy.Spec.Network.MatchDNSQueries {
+			if dns.Severity == 0 {
+				if secPolicy.Spec.Network.Severity != 0 {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Severity = secPolicy.Spec.Network.Severity
+				} else {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(dns.Tags) == 0 {
+				if len(secPolicy.Spec.Network.Tags) > 0 {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Tags = secPolicy.Spec.Network.Tags
+				} else {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(dns.Message) == 0 {
+				if len(secPolicy.Spec.Network.Message) > 0 {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Message = secPolicy.Spec.Network.Message
+				} else {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(dns.Action) == 0 {
+				if len(secPolicy.Spec.Network.Action) > 0 {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Action = secPolicy.Spec.Network.Action
+				} else {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
+	if len(secPolicy.Spec.Device.MatchDevice) > 0 {
+		for idx, device := range secPolicy.Spec.Device.MatchDevice {
+			if device.Severity == 0 {
+				if secPolicy.Spec.Device.Severity != 0 {
+					secPolicy.Spec.Device.MatchDevice[idx].Severity = secPolicy.Spec.Device.Severity
+				} else {
+					secPolicy.Spec.Device.MatchDevice[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(device.Tags) == 0 {
+				if len(secPolicy.Spec.Device.Tags) > 0 {
+					secPolicy.Spec.Device.MatchDevice[idx].Tags = secPolicy.Spec.Device.Tags
+				} else {
+					secPolicy.Spec.Device.MatchDevice[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(device.Message) == 0 {
+				if len(secPolicy.Spec.Device.Message) > 0 {
+					secPolicy.Spec.Device.MatchDevice[idx].Message = secPolicy.Spec.Device.Message
+				} else {
+					secPolicy.Spec.Device.MatchDevice[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(device.Action) == 0 {
+				if len(secPolicy.Spec.Device.Action) > 0 {
+					secPolicy.Spec.Device.MatchDevice[idx].Action = secPolicy.Spec.Device.Action
+				} else {
+					secPolicy.Spec.Device.MatchDevice[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
+	if len(secPolicy.Spec.Capabilities.MatchCapabilities) > 0 {
+		for idx, cap := range secPolicy.Spec.Capabilities.MatchCapabilities {
+			if cap.Severity == 0 {
+				if secPolicy.Spec.Capabilities.Severity != 0 {
+					secPolicy.Spec.Capabilities.MatchCapabilities[idx].Severity = secPolicy.Spec.Capabilities.Severity
+				} else {
+					secPolicy.Spec.Capabilities.MatchCapabilities[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(cap.Tags) == 0 {
+				if len(secPolicy.Spec.Capabilities.Tags) > 0 {
+					secPolicy.Spec.Capabilities.MatchCapabilities[idx].Tags = secPolicy.Spec.Capabilities.Tags
+				} else {
+					secPolicy.Spec.Capabilities.MatchCapabilities[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(cap.Message) == 0 {
+				if len(secPolicy.Spec.Capabilities.Message) > 0 {
+					secPolicy.Spec.Capabilities.MatchCapabilities[idx].Message = secPolicy.Spec.Capabilities.Message
+				} else {
+					secPolicy.Spec.Capabilities.MatchCapabilities[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(cap.Action) == 0 {
+				if len(secPolicy.Spec.Capabilities.Action) > 0 {
+					secPolicy.Spec.Capabilities.MatchCapabilities[idx].Action = secPolicy.Spec.Capabilities.Action
+				} else {
+					secPolicy.Spec.Capabilities.MatchCapabilities[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
+	if len(secPolicy.Spec.Syscalls.MatchSyscalls) > 0 {
+		for idx, syscall := range secPolicy.Spec.Syscalls.MatchSyscalls {
+			if syscall.Severity == 0 {
+				if secPolicy.Spec.Syscalls.Severity != 0 {
+					secPolicy.Spec.Syscalls.MatchSyscalls[idx].Severity = secPolicy.Spec.Syscalls.Severity
+				} else {
+					secPolicy.Spec.Syscalls.MatchSyscalls[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(syscall.Tags) == 0 {
+				if len(secPolicy.Spec.Syscalls.Tags) > 0 {
+					secPolicy.Spec.Syscalls.MatchSyscalls[idx].Tags = secPolicy.Spec.Syscalls.Tags
+				} else {
+					secPolicy.Spec.Syscalls.MatchSyscalls[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(syscall.Message) == 0 {
+				if len(secPolicy.Spec.Syscalls.Message) > 0 {
+					secPolicy.Spec.Syscalls.MatchSyscalls[idx].Message = secPolicy.Spec.Syscalls.Message
+				} else {
+					secPolicy.Spec.Syscalls.MatchSyscalls[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+		}
+	}
+
+	if len(secPolicy.Spec.Syscalls.MatchPaths) > 0 {
+		for idx, syscall := range secPolicy.Spec.Syscalls.MatchPaths {
+			if syscall.Severity == 0 {
+				if secPolicy.Spec.Syscalls.Severity != 0 {
+					secPolicy.Spec.Syscalls.MatchPaths[idx].Severity = secPolicy.Spec.Syscalls.Severity
+				} else {
+					secPolicy.Spec.Syscalls.MatchPaths[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(syscall.Tags) == 0 {
+				if len(secPolicy.Spec.Syscalls.Tags) > 0 {
+					secPolicy.Spec.Syscalls.MatchPaths[idx].Tags = secPolicy.Spec.Syscalls.Tags
+				} else {
+					secPolicy.Spec.Syscalls.MatchPaths[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(syscall.Message) == 0 {
+				if len(secPolicy.Spec.Syscalls.Message) > 0 {
+					secPolicy.Spec.Syscalls.MatchPaths[idx].Message = secPolicy.Spec.Syscalls.Message
+				} else {
+					secPolicy.Spec.Syscalls.MatchPaths[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+		}
+	}
+	return
+}
+
+// CreateNetworkSecurityPolicy - creates `KubeArmorNetworkPolicy` object from crd
+func (dm *KubeArmorDaemon) CreateNetworkSecurityPolicy(securityPolicy any) (secPolicy tp.NetworkSecurityPolicy, err error) {
+	var name string
+	kubearmorNetworkPolicy := securityPolicy.(ksp.KubeArmorNetworkPolicy)
+
+	name = kubearmorNetworkPolicy.Name
+	if err := kl.Clone(kubearmorNetworkPolicy.Spec, &secPolicy.Spec); err != nil {
+		dm.Logger.Errf("Failed to clone a spec (%s)", err.Error())
+		return tp.NetworkSecurityPolicy{}, err
+	}
+
+	secPolicy.Spec.NodeSelector.Identities = []string{}
+
+	for k, v := range secPolicy.Spec.NodeSelector.MatchLabels {
+		secPolicy.Spec.NodeSelector.Identities = append(secPolicy.Spec.NodeSelector.Identities, k+"="+v)
+	}
+
+	slices.Sort(secPolicy.Spec.NodeSelector.Identities)
+
+	// Build Selector.Identities from matchLabels so isPodPolicy is correctly
+	// detected in the network policy enforcer (mirrors ParseAndUpdateNetworkSecurityPolicy).
+	secPolicy.Spec.Selector.Identities = []string{}
+
+	for k, v := range secPolicy.Spec.Selector.MatchLabels {
+		secPolicy.Spec.Selector.Identities = append(secPolicy.Spec.Selector.Identities, k+"="+v)
+	}
+
+	slices.Sort(secPolicy.Spec.Selector.Identities)
+
+	secPolicy.Metadata = map[string]string{}
+	secPolicy.Metadata["policyName"] = name
+
+	switch secPolicy.Spec.Action {
+	case "allow":
+		secPolicy.Spec.Action = "Allow"
+	case "audit":
+		secPolicy.Spec.Action = "Audit"
+	case "block":
+		secPolicy.Spec.Action = "Block"
+	case "":
+		secPolicy.Spec.Action = "Block" // by default
+	}
+
+	// add severities, tags, messages, and actions
+
+	if len(secPolicy.Spec.Ingress) > 0 {
+		for idx, igr := range secPolicy.Spec.Ingress {
+			if igr.Severity == 0 {
+				if secPolicy.Spec.Severity != 0 {
+					secPolicy.Spec.Ingress[idx].Severity = secPolicy.Spec.Severity
+				} else {
+					secPolicy.Spec.Ingress[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(igr.Tags) == 0 {
+				if len(secPolicy.Spec.Tags) > 0 {
+					secPolicy.Spec.Ingress[idx].Tags = secPolicy.Spec.Tags
+				} else {
+					secPolicy.Spec.Ingress[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(igr.Message) == 0 {
+				if len(secPolicy.Spec.Message) > 0 {
+					secPolicy.Spec.Ingress[idx].Message = secPolicy.Spec.Message
+				} else {
+					secPolicy.Spec.Ingress[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(igr.Action) == 0 {
+				if len(secPolicy.Spec.Action) > 0 {
+					secPolicy.Spec.Ingress[idx].Action = secPolicy.Spec.Action
+				} else {
+					secPolicy.Spec.Ingress[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
+	if len(secPolicy.Spec.Egress) > 0 {
+		for idx, egr := range secPolicy.Spec.Egress {
+			if egr.Severity == 0 {
+				if secPolicy.Spec.Severity != 0 {
+					secPolicy.Spec.Egress[idx].Severity = secPolicy.Spec.Severity
+				} else {
+					secPolicy.Spec.Egress[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(egr.Tags) == 0 {
+				if len(secPolicy.Spec.Tags) > 0 {
+					secPolicy.Spec.Egress[idx].Tags = secPolicy.Spec.Tags
+				} else {
+					secPolicy.Spec.Egress[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(egr.Message) == 0 {
+				if len(secPolicy.Spec.Message) > 0 {
+					secPolicy.Spec.Egress[idx].Message = secPolicy.Spec.Message
+				} else {
+					secPolicy.Spec.Egress[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(egr.Action) == 0 {
+				if len(secPolicy.Spec.Action) > 0 {
+					secPolicy.Spec.Egress[idx].Action = secPolicy.Spec.Action
+				} else {
+					secPolicy.Spec.Egress[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+	return
+}
+
 // WatchSecurityPolicies Function
-func (dm *KubeArmorDaemon) WatchSecurityPolicies() cache.InformerSynced {
-	for {
-		if err := K8s.CheckCustomResourceDefinition("kubearmorpolicies"); err != nil {
-			time.Sleep(time.Second * 1)
-			continue
-		} else {
-			break
+func (dm *KubeArmorDaemon) WatchSecurityPolicies(timeout time.Duration) cache.InformerSynced {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	crdFound := false
+	for !crdFound {
+		select {
+		case <-ctx.Done():
+			dm.Logger.Warn("timeout while monitoring security policies, kubearmorpolicies CRD not found")
+			return nil
+		default:
+			if err := K8s.CheckCustomResourceDefinition("kubearmorpolicies"); err == nil {
+				crdFound = true
+			} else {
+				time.Sleep(time.Second * 1)
+			}
 		}
 	}
 
@@ -2013,6 +2645,7 @@ func (dm *KubeArmorDaemon) ParseAndUpdateHostSecurityPolicy(event tp.K8sKubeArmo
 	}
 
 	kl.ObjCommaExpandFirstDupOthers(&secPolicy.Spec.Network.MatchProtocols)
+	kl.ObjCommaExpandFirstDupOthers(&secPolicy.Spec.Network.MatchDNSQueries)
 	kl.ObjCommaExpandFirstDupOthers(&secPolicy.Spec.Capabilities.MatchCapabilities)
 
 	switch secPolicy.Spec.Action {
@@ -2290,6 +2923,42 @@ func (dm *KubeArmorDaemon) ParseAndUpdateHostSecurityPolicy(event tp.K8sKubeArmo
 		}
 	}
 
+	if len(secPolicy.Spec.Network.MatchDNSQueries) > 0 {
+		for idx, dns := range secPolicy.Spec.Network.MatchDNSQueries {
+			if dns.Severity == 0 {
+				if secPolicy.Spec.Network.Severity != 0 {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Severity = secPolicy.Spec.Network.Severity
+				} else {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Severity = secPolicy.Spec.Severity
+				}
+			}
+
+			if len(dns.Tags) == 0 {
+				if len(secPolicy.Spec.Network.Tags) > 0 {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Tags = secPolicy.Spec.Network.Tags
+				} else {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Tags = secPolicy.Spec.Tags
+				}
+			}
+
+			if len(dns.Message) == 0 {
+				if len(secPolicy.Spec.Network.Message) > 0 {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Message = secPolicy.Spec.Network.Message
+				} else {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Message = secPolicy.Spec.Message
+				}
+			}
+
+			if len(dns.Action) == 0 {
+				if len(secPolicy.Spec.Network.Action) > 0 {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Action = secPolicy.Spec.Network.Action
+				} else {
+					secPolicy.Spec.Network.MatchDNSQueries[idx].Action = secPolicy.Spec.Action
+				}
+			}
+		}
+	}
+
 	if len(secPolicy.Spec.Device.MatchDevice) > 0 {
 		for idx, device := range secPolicy.Spec.Device.MatchDevice {
 			if device.Severity == 0 {
@@ -2499,57 +3168,110 @@ func (dm *KubeArmorDaemon) ParseAndUpdateHostSecurityPolicy(event tp.K8sKubeArmo
 }
 
 // WatchHostSecurityPolicies Function
-func (dm *KubeArmorDaemon) WatchHostSecurityPolicies(timeout time.Duration) {
+func (dm *KubeArmorDaemon) WatchHostSecurityPolicies(timeout time.Duration) cache.InformerSynced {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	for {
+	crdFound := false
+	for !crdFound {
 		select {
 		case <-ctx.Done():
 			dm.Logger.Warn("timeout while monitoring host security policies, kubearmorhostpolicies CRD not found")
-			return
+			return nil
 		default:
-			if err := K8s.CheckCustomResourceDefinition("kubearmorhostpolicies"); err != nil {
+			if err := K8s.CheckCustomResourceDefinition("kubearmorhostpolicies"); err == nil {
+				crdFound = true
+			} else {
 				time.Sleep(time.Second * 1)
-				continue
-			}
-		}
-
-		dm.Logger.Print("Started to monitor host security policies")
-
-		if err := K8s.CheckCustomResourceDefinition("kubearmorhostpolicies"); err != nil {
-			time.Sleep(time.Second * 1)
-			continue
-		}
-
-		if resp := K8s.WatchK8sHostSecurityPolicies(); resp != nil {
-			defer func() {
-				if err := resp.Body.Close(); err != nil {
-					kg.Warnf("Error closing http stream %s\n", err)
-				}
-			}()
-
-			decoder := json.NewDecoder(resp.Body)
-			for {
-				event := tp.K8sKubeArmorHostPolicyEvent{}
-				if err := decoder.Decode(&event); err == io.EOF {
-					break
-				} else if err != nil {
-					break
-				}
-
-				if event.Object.Status.Status != "" && event.Object.Status.Status != "OK" {
-					continue
-				}
-
-				if event.Type != addEvent && event.Type != updateEvent && event.Type != deleteEvent {
-					continue
-				}
-
-				dm.ParseAndUpdateHostSecurityPolicy(event)
 			}
 		}
 	}
+
+	factory := kspinformer.NewSharedInformerFactory(K8s.KSPClient, 0)
+
+	informer := factory.Security().V1().KubeArmorHostPolicies().Informer()
+	registration, err := informer.AddEventHandler(
+		cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj any) {
+				// create a security policy
+				if policy, ok := obj.(*ksp.KubeArmorHostPolicy); ok {
+
+					secPolicy, err := dm.CreateHostSecurityPolicy(*policy)
+					if err != nil {
+						dm.Logger.Warnf("Error ADD, %s", err)
+						return
+					}
+					dm.HostSecurityPoliciesLock.Lock()
+					new := true
+					for _, policy := range dm.HostSecurityPolicies {
+						if policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
+							new = false
+							break
+						}
+					}
+					if new {
+						dm.HostSecurityPolicies = append(dm.HostSecurityPolicies, secPolicy)
+					}
+					dm.HostSecurityPoliciesLock.Unlock()
+					dm.Logger.Printf("Detected a Host Security Policy (added/%s)", secPolicy.Metadata["policyName"])
+
+					// apply host security policies
+					dm.UpdateHostSecurityPolicies()
+
+				}
+			},
+			UpdateFunc: func(oldObj, newObj any) {
+				if policy, ok := newObj.(*ksp.KubeArmorHostPolicy); ok {
+					secPolicy, err := dm.CreateHostSecurityPolicy(*policy)
+					if err != nil {
+						return
+					}
+
+					dm.HostSecurityPoliciesLock.Lock()
+					for idx, policy := range dm.HostSecurityPolicies {
+						if policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
+							dm.HostSecurityPolicies[idx] = secPolicy
+							break
+						}
+					}
+					dm.HostSecurityPoliciesLock.Unlock()
+
+					dm.Logger.Printf("Detected a Host Security Policy (modified/%s)", secPolicy.Metadata["policyName"])
+
+					// apply host security policies
+					dm.UpdateHostSecurityPolicies()
+				}
+			},
+			DeleteFunc: func(obj any) {
+				if policy, ok := obj.(*ksp.KubeArmorHostPolicy); ok {
+					secPolicy, err := dm.CreateHostSecurityPolicy(*policy)
+					if err != nil {
+						return
+					}
+					dm.HostSecurityPoliciesLock.Lock()
+					for idx, policy := range dm.HostSecurityPolicies {
+						if policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
+							dm.HostSecurityPolicies = append(dm.HostSecurityPolicies[:idx], dm.HostSecurityPolicies[idx+1:]...)
+							break
+						}
+					}
+					dm.HostSecurityPoliciesLock.Unlock()
+
+					dm.Logger.Printf("Detected a Host Security Policy (deleted/%s)", secPolicy.Metadata["policyName"])
+
+					// apply host security policies
+					dm.UpdateHostSecurityPolicies()
+				}
+			},
+		},
+	)
+	if err != nil {
+		dm.Logger.Err("Couldn't start watching KubeArmor Host Security Policies")
+		return nil
+	}
+
+	go factory.Start(StopChan)
+	return registration.HasSynced
 }
 
 // ==================================== //
@@ -2567,17 +3289,34 @@ func (dm *KubeArmorDaemon) UpdateNetworkSecurityPolicies() {
 	secPolicies := []tp.NetworkSecurityPolicy{}
 
 	for _, policy := range networkSecurityPoliciesCopy {
-		if kl.MatchIdentities(policy.Spec.NodeSelector.Identities, dm.Node.Identities) {
+		if len(policy.Spec.Selector.Identities) > 0 {
+			// Container policy: pass to networkPolicyEnforcer to filter by endpoint
+			secPolicies = append(secPolicies, policy)
+		} else if kl.MatchIdentities(policy.Spec.NodeSelector.Identities, dm.Node.Identities) {
+			// Host policy: only pass if it matches this node
 			secPolicies = append(secPolicies, policy)
 		}
 	}
 
-	if cfg.GlobalCfg.NetworkPolicyEnforcer {
+	if cfg.GlobalCfg.NetworkPolicyEnforcer && dm.NetworkPolicyEnforcer != nil {
 		// update network security policies
 		dm.Logger.UpdateNetworkSecurityPolicies("UPDATED", secPolicies)
 
+		// copy endpoints
+		dm.EndPointsLock.RLock()
+		endpoints := make([]tp.EndPoint, len(dm.EndPoints))
+		copy(endpoints, dm.EndPoints)
+		dm.EndPointsLock.RUnlock()
+
+		// copy containers
+		dm.ContainersLock.RLock()
+		containers := make(map[string]tp.Container)
+		for k, v := range dm.Containers {
+			containers[k] = v
+		}
+		dm.ContainersLock.RUnlock()
 		// enforce network policies
-		dm.NetworkPolicyEnforcer.UpdateNetworkSecurityPolicies(secPolicies)
+		dm.NetworkPolicyEnforcer.UpdateNetworkSecurityPolicies(secPolicies, endpoints, containers)
 	}
 }
 
@@ -2615,6 +3354,14 @@ func (dm *KubeArmorDaemon) ParseAndUpdateNetworkSecurityPolicy(event tp.K8sKubeA
 	}
 
 	slices.Sort(secPolicy.Spec.NodeSelector.Identities)
+
+	secPolicy.Spec.Selector.Identities = []string{}
+
+	for k, v := range secPolicy.Spec.Selector.MatchLabels {
+		secPolicy.Spec.Selector.Identities = append(secPolicy.Spec.Selector.Identities, k+"="+v)
+	}
+
+	slices.Sort(secPolicy.Spec.Selector.Identities)
 
 	// add severities, tags, messages, and actions
 
@@ -2746,7 +3493,6 @@ func (dm *KubeArmorDaemon) ParseAndUpdateNetworkSecurityPolicy(event tp.K8sKubeA
 	dm.NetworkSecurityPoliciesLock.Unlock()
 
 	dm.Logger.Printf("Detected a Network Security Policy (%s/%s)", strings.ToLower(event.Type), secPolicy.Metadata["policyName"])
-
 	// apply network security policies to a host
 	dm.UpdateNetworkSecurityPolicies()
 
@@ -2769,57 +3515,110 @@ func (dm *KubeArmorDaemon) ParseAndUpdateNetworkSecurityPolicy(event tp.K8sKubeA
 }
 
 // WatchNetworkSecurityPolicies Function
-func (dm *KubeArmorDaemon) WatchNetworkSecurityPolicies(timeout time.Duration) {
+func (dm *KubeArmorDaemon) WatchNetworkSecurityPolicies(timeout time.Duration) cache.InformerSynced {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	for {
+	crdFound := false
+	for !crdFound {
 		select {
 		case <-ctx.Done():
 			dm.Logger.Warn("timeout while monitoring network security policies, kubearmornetworkpolicies CRD not found")
-			return
+			return nil
 		default:
-			if err := K8s.CheckCustomResourceDefinition("kubearmornetworkpolicies"); err != nil {
+			if err := K8s.CheckCustomResourceDefinition("kubearmornetworkpolicies"); err == nil {
+				crdFound = true
+			} else {
 				time.Sleep(time.Second * 1)
-				continue
-			}
-		}
-
-		dm.Logger.Print("Started to monitor network security policies")
-
-		if err := K8s.CheckCustomResourceDefinition("kubearmornetworkpolicies"); err != nil {
-			time.Sleep(time.Second * 1)
-			continue
-		}
-
-		if resp := K8s.WatchK8sNetworkSecurityPolicies(); resp != nil {
-			defer func() {
-				if err := resp.Body.Close(); err != nil {
-					kg.Warnf("Error closing http stream %s\n", err)
-				}
-			}()
-
-			decoder := json.NewDecoder(resp.Body)
-			for {
-				event := tp.K8sKubeArmorNetworkPolicyEvent{}
-				if err := decoder.Decode(&event); err == io.EOF {
-					break
-				} else if err != nil {
-					break
-				}
-
-				if event.Object.Status.Status != "" && event.Object.Status.Status != "OK" {
-					continue
-				}
-
-				if event.Type != addEvent && event.Type != updateEvent && event.Type != deleteEvent {
-					continue
-				}
-
-				dm.ParseAndUpdateNetworkSecurityPolicy(event)
 			}
 		}
 	}
+
+	factory := kspinformer.NewSharedInformerFactory(K8s.KSPClient, 0)
+
+	informer := factory.Security().V1().KubeArmorNetworkPolicies().Informer()
+	registration, err := informer.AddEventHandler(
+		cache.ResourceEventHandlerFuncs{
+			AddFunc: func(obj any) {
+				// create a security policy
+				if policy, ok := obj.(*ksp.KubeArmorNetworkPolicy); ok {
+
+					secPolicy, err := dm.CreateNetworkSecurityPolicy(*policy)
+					if err != nil {
+						dm.Logger.Warnf("Error ADD, %s", err)
+						return
+					}
+					dm.NetworkSecurityPoliciesLock.Lock()
+					new := true
+					for _, policy := range dm.NetworkSecurityPolicies {
+						if policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
+							new = false
+							break
+						}
+					}
+					if new {
+						dm.NetworkSecurityPolicies = append(dm.NetworkSecurityPolicies, secPolicy)
+					}
+					dm.NetworkSecurityPoliciesLock.Unlock()
+					dm.Logger.Printf("Detected a Network Security Policy (added/%s)", secPolicy.Metadata["policyName"])
+
+					// apply network security policies
+					dm.UpdateNetworkSecurityPolicies()
+
+				}
+			},
+			UpdateFunc: func(oldObj, newObj any) {
+				if policy, ok := newObj.(*ksp.KubeArmorNetworkPolicy); ok {
+					secPolicy, err := dm.CreateNetworkSecurityPolicy(*policy)
+					if err != nil {
+						return
+					}
+
+					dm.NetworkSecurityPoliciesLock.Lock()
+					for idx, policy := range dm.NetworkSecurityPolicies {
+						if policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
+							dm.NetworkSecurityPolicies[idx] = secPolicy
+							break
+						}
+					}
+					dm.NetworkSecurityPoliciesLock.Unlock()
+
+					dm.Logger.Printf("Detected a Network Security Policy (modified/%s)", secPolicy.Metadata["policyName"])
+
+					// apply network security policies
+					dm.UpdateNetworkSecurityPolicies()
+				}
+			},
+			DeleteFunc: func(obj any) {
+				if policy, ok := obj.(*ksp.KubeArmorNetworkPolicy); ok {
+					secPolicy, err := dm.CreateNetworkSecurityPolicy(*policy)
+					if err != nil {
+						return
+					}
+					dm.NetworkSecurityPoliciesLock.Lock()
+					for idx, policy := range dm.NetworkSecurityPolicies {
+						if policy.Metadata["policyName"] == secPolicy.Metadata["policyName"] {
+							dm.NetworkSecurityPolicies = append(dm.NetworkSecurityPolicies[:idx], dm.NetworkSecurityPolicies[idx+1:]...)
+							break
+						}
+					}
+					dm.NetworkSecurityPoliciesLock.Unlock()
+
+					dm.Logger.Printf("Detected a Network Security Policy (deleted/%s)", secPolicy.Metadata["policyName"])
+
+					// apply network security policies
+					dm.UpdateNetworkSecurityPolicies()
+				}
+			},
+		},
+	)
+	if err != nil {
+		dm.Logger.Err("Couldn't start watching KubeArmor Network Security Policies")
+		return nil
+	}
+
+	go factory.Start(StopChan)
+	return registration.HasSynced
 }
 
 // ===================== //
@@ -2845,7 +3644,7 @@ func (dm *KubeArmorDaemon) updatEndpointsWithCM(cm *corev1.ConfigMap, action str
 		fp, fa := validateDefaultPosture("kubearmor-file-posture", &ns, cm.Data[cfg.ConfigDefaultFilePosture])
 		np, na := validateDefaultPosture("kubearmor-network-posture", &ns, cm.Data[cfg.ConfigDefaultNetworkPosture])
 		cp, ca := validateDefaultPosture("kubearmor-capabilities-posture", &ns, cm.Data[cfg.ConfigDefaultCapabilitiesPosture])
-		annotated := fa || na || ca      // if namespace is annotated for atleast one posture
+		annotated := fa || na || ca      // if namespace is annotated for at least one posture
 		fullyannotated := fa && na && ca // if namespace is fully annotated
 		posture := tp.DefaultPosture{
 			FileAction:         fp,
@@ -2876,7 +3675,7 @@ func (dm *KubeArmorDaemon) updatEndpointsWithCM(cm *corev1.ConfigMap, action str
 // UpdateDefaultPostureWithCM Function
 func (dm *KubeArmorDaemon) UpdateDefaultPostureWithCM(endPoint *tp.EndPoint, action string, namespace string, defaultPosture tp.DefaultPosture, annotated bool) {
 
-	// namespace is (partialy) annotated with posture annotation(s)
+	// namespace is (partially) annotated with posture annotation(s)
 	if annotated {
 		// update the dm.DefaultPosture[namespace]
 		dm.DefaultPostures[namespace] = defaultPosture
@@ -3034,7 +3833,7 @@ func (dm *KubeArmorDaemon) UpdateVisibility(action string, namespace string, vis
 				IMA:        visibility.IMA,
 			}
 		}
-		dm.Logger.Printf("Namespace %s visibiliy configured %+v", namespace, visibility)
+		dm.Logger.Printf("Namespace %s visibility configured %+v", namespace, visibility)
 	case deleteEvent:
 		if val, ok := dm.SystemMonitor.NamespacePidsMap[namespace]; ok {
 			for _, nskey := range val.NsKeys {

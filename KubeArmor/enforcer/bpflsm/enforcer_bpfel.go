@@ -46,6 +46,32 @@ type enforcerCmdArgsKey struct {
 	Ind  uint64
 }
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	enforcerMapArgsBufk               = "args_bufk"
+	enforcerMapBufk                   = "bufk"
+	enforcerMapBufs                   = "bufs"
+	enforcerMapBufsOff                = "bufs_off"
+	enforcerMapCmdArgsBuf             = "cmd_args_buf"
+	enforcerMapKubearmorAlertThrottle = "kubearmor_alert_throttle"
+	enforcerMapKubearmorArgsStore     = "kubearmor_args_store"
+	enforcerMapKubearmorArguments     = "kubearmor_arguments"
+	enforcerMapKubearmorConfig        = "kubearmor_config"
+	enforcerMapKubearmorContainers    = "kubearmor_containers"
+	enforcerMapKubearmorEvents        = "kubearmor_events"
+	enforcerMapKubearmorExecPids      = "kubearmor_exec_pids"
+	enforcerProgEnforceCap            = "enforce_cap"
+	enforcerProgEnforceDns            = "enforce_dns"
+	enforcerProgEnforceFile           = "enforce_file"
+	enforcerProgEnforceFilePerm       = "enforce_file_perm"
+	enforcerProgEnforceNetAccept      = "enforce_net_accept"
+	enforcerProgEnforceNetConnect     = "enforce_net_connect"
+	enforcerProgEnforceNetCreate      = "enforce_net_create"
+	enforcerProgEnforceProc           = "enforce_proc"
+)
+
 // loadEnforcer returns the embedded CollectionSpec for enforcer.
 func loadEnforcer() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_EnforcerBytes)
@@ -66,7 +92,7 @@ func loadEnforcer() (*ebpf.CollectionSpec, error) {
 //	*enforcerMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func loadEnforcerObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func loadEnforcerObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := loadEnforcer()
 	if err != nil {
 		return err
@@ -89,6 +115,7 @@ type enforcerSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type enforcerProgramSpecs struct {
 	EnforceCap        *ebpf.ProgramSpec `ebpf:"enforce_cap"`
+	EnforceDns        *ebpf.ProgramSpec `ebpf:"enforce_dns"`
 	EnforceFile       *ebpf.ProgramSpec `ebpf:"enforce_file"`
 	EnforceFilePerm   *ebpf.ProgramSpec `ebpf:"enforce_file_perm"`
 	EnforceNetAccept  *ebpf.ProgramSpec `ebpf:"enforce_net_accept"`
@@ -183,6 +210,7 @@ type enforcerVariables struct {
 // It can be passed to loadEnforcerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type enforcerPrograms struct {
 	EnforceCap        *ebpf.Program `ebpf:"enforce_cap"`
+	EnforceDns        *ebpf.Program `ebpf:"enforce_dns"`
 	EnforceFile       *ebpf.Program `ebpf:"enforce_file"`
 	EnforceFilePerm   *ebpf.Program `ebpf:"enforce_file_perm"`
 	EnforceNetAccept  *ebpf.Program `ebpf:"enforce_net_accept"`
@@ -194,6 +222,7 @@ type enforcerPrograms struct {
 func (p *enforcerPrograms) Close() error {
 	return _EnforcerClose(
 		p.EnforceCap,
+		p.EnforceDns,
 		p.EnforceFile,
 		p.EnforceFilePerm,
 		p.EnforceNetAccept,

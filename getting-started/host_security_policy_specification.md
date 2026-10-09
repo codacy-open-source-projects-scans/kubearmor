@@ -25,13 +25,13 @@ spec:
     - path: [absolute executable path]
       ownerOnly: [true|false]              # --> optional
       fromSource:                          # --> optional
-      - path: [absolute exectuable path]
+      - path: [absolute executable path]
     matchDirectories:
     - dir: [absolute directory path]
       recursive: [true|false]              # --> optional
       ownerOnly: [true|false]              # --> optional
       fromSource:                          # --> optional
-      - path: [absolute exectuable path]
+      - path: [absolute executable path]
     matchPatterns:
     - pattern: [regex pattern]
       ownerOnly: [true|false]              # --> optional
@@ -42,14 +42,14 @@ spec:
       readOnly: [true|false]               # --> optional
       ownerOnly: [true|false]              # --> optional
       fromSource:                          # --> optional
-      - path: [absolute exectuable path]
+      - path: [absolute executable path]
     matchDirectories:
     - dir: [absolute directory path]
       recursive: [true|false]              # --> optional
       readOnly: [true|false]               # --> optional
       ownerOnly: [true|false]              # --> optional
       fromSource:                          # --> optional
-      - path: [absolute exectuable path]
+      - path: [absolute executable path]
     matchPatterns:
     - pattern: [regex pattern]
       readOnly: [true|false]               # --> optional
@@ -59,7 +59,7 @@ spec:
     matchProtocols:
     - protocol: [TCP|tcp|UDP|udp|ICMP|icmp]
       fromSource:
-      - path: [absolute exectuable path]
+      - path: [absolute executable path]
 
   device:
     matchDevice:
@@ -72,7 +72,7 @@ spec:
     matchCapabilities:
     - capability: [capability name]
       fromSource:
-      - path: [absolute exectuable path]
+      - path: [absolute executable path]
 
   action: [Audit|Block] (Block by default)
 ```
@@ -141,6 +141,17 @@ Now, we will briefly explain how to define a host security policy.
       kubernetes.io/os: [operating system, (e.g., linux)]
   ```
 
+  KubeArmor supports the following hostname label matching modes for Node/VM policies:
+
+  | Mode | Example | Description |
+  |---|---|---|
+  | Exact | `kubearmor.io/hostname: kubearmor-dev` | Targets a specific node by name |
+  | Wildcard | `kubearmor.io/hostname: "*"` | Targets all Nodes/VMs |
+  | Comma-separated | `kubernetes.io/hostname: node-1,node-2` | Targets multiple specific nodes |
+  | Regex | `kubearmor.io/hostnamereg: node-*` | Targets nodes whose hostname matches a pattern |
+
+  > **Note:** `kubernetes.io/` prefix variants are only available in Kubernetes environments. The `hostnamereg` label is supported with both `kubearmor.io/` and `kubernetes.io/` prefixes.
+
 * Process
 
   In the process section, there are three types of matches: matchPaths, matchDirectories, and matchPatterns. You can define specific executables using matchPaths or all executables in specific directories using matchDirectories. In the case of matchPatterns, advanced operators may be able to determine particular patterns for executables by using regular expressions. However, we generally do not recommend using this match.
@@ -157,7 +168,7 @@ Now, we will briefly explain how to define a host security policy.
         recursive: [true|false]            # --> optional
         ownerOnly: [true|false]            # --> optional
         fromSource:                        # --> optional
-        - path: [absolute exectuable path]
+        - path: [absolute executable path]
       matchPatterns:
       - pattern: [regex pattern]
         ownerOnly: [true|false]            # --> optional
@@ -263,17 +274,17 @@ Now, we will briefly explain how to define a host security policy.
       - syscallX
       - syscallY
       fromSource:                            # --> optional
-      - path: [absolute exectuable path]
+      - path: [absolute executable path]
       - dir: [absolute directory path]
         recursive: [true|false]              # --> optional
     matchPaths:
-    - path: [absolute directory path | absolute exectuable path]
+    - path: [absolute directory path | absolute executable path]
       recursive: [true|false]                # --> optional
       - syscall:
         - syscallX
         - syscallY
       fromSource:                            # --> optional
-      - path: [absolute exectuable path]
+      - path: [absolute executable path]
       - dir: [absolute directory path]
         recursive: [true|false]              # --> optional
   ```

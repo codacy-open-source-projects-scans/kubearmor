@@ -26,8 +26,8 @@ import (
 	tp "github.com/kubearmor/KubeArmor/KubeArmor/types"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang enforcer ../../BPF/enforcer.bpf.c -- -I/usr/include/ -O2 -g -fno-stack-protector
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang enforcer_path ../../BPF/enforcer_path.bpf.c -- -I/usr/include/ -O2 -g -fno-stack-protector
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang enforcer ../../BPF/enforcer.bpf.c -- -I/usr/include/ -O2 -g -fno-stack-protector -Wno-missing-declarations
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang enforcer_path ../../BPF/enforcer_path.bpf.c -- -I/usr/include/ -O2 -g -fno-stack-protector -Wno-missing-declarations
 
 // ===================== //
 // == BPFLSM Enforcer == //
@@ -183,6 +183,12 @@ func NewBPFEnforcer(node tp.Node, pinpath string, logger *fd.Feeder, monitor *mo
 	be.Probes[be.obj.EnforceCap.String()], err = link.AttachLSM(link.LSMOptions{Program: be.obj.EnforceCap})
 	if err != nil {
 		be.Logger.Errf("opening lsm %s: %s", be.obj.EnforceCap.String(), err)
+		return be, err
+	}
+
+	be.Probes[be.obj.EnforceDns.String()], err = link.AttachLSM(link.LSMOptions{Program: be.obj.EnforceDns})
+	if err != nil {
+		be.Logger.Errf("opening lsm %s: %s", be.obj.EnforceDns.String(), err)
 		return be, err
 	}
 
@@ -392,6 +398,11 @@ func (be *BPFEnforcer) TraceEvents() {
 				log.Resource = fd.GetProtocolFromName(mon.GetProtocol(sockProtocol))
 			}
 			log.Data = "lsm=" + mon.GetSyscallName(int32(event.EventID)) + " " + log.Resource
+
+		case mon.SocketSendMsg:
+			log.Operation = "Network"
+			log.Resource = string(bytes.Trim(event.Data.Path[:], "\x00"))
+			log.Data = "lsm=" + mon.GetSyscallName(int32(event.EventID)) + " " + "domain=" + log.Resource
 
 		case mon.SecurityBprmCheck:
 			log.Operation = "Process"

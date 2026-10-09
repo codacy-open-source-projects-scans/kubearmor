@@ -444,21 +444,24 @@ func GenerateDaemonSet(env, namespace string) *appsv1.DaemonSet {
 							Ports: []corev1.ContainerPort{
 								{
 									ContainerPort: port,
+									Name:          "grpc",
+								},
+								{
+									ContainerPort: healthPort,
+									Name:          "grpc-health",
 								},
 							},
 							VolumeMounts: volumeMounts,
 							LivenessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
-									Exec: &corev1.ExecAction{
-										Command: []string{
-											"/bin/bash",
-											"-c",
-											"if [ -z $(pgrep kubearmor) ]; then exit 1; fi;",
-										},
+									GRPC: &corev1.GRPCAction{
+										Port: healthPort,
 									},
 								},
 								InitialDelaySeconds: 60,
-								PeriodSeconds:       10,
+								PeriodSeconds:       20,
+								TimeoutSeconds:      5,
+								FailureThreshold:    5,
 							},
 							TerminationMessagePolicy: "File",
 							TerminationMessagePath:   "/dev/termination-log",

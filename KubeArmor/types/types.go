@@ -87,6 +87,7 @@ type EndPoint struct {
 	Identities []string          `json:"identities"`
 
 	Containers       []string `json:"containers"`
+	PodIP            string   `json:"podIP,omitempty"`
 	AppArmorProfiles []string `json:"apparmorProfiles"`
 	SELinuxProfiles  []string `json:"selinuxProfiles"`
 
@@ -157,8 +158,9 @@ type K8sPod struct {
 	Labels          map[string]string
 	Containers      map[string]string
 	ContainerImages map[string]string
+	PodIP           string
 
-	// using two maps here as it is inefficent to
+	// using two maps here as it is inefficient to
 	// obtain either from just one
 	// for storing privilegd container names
 	PrivilegedContainers map[string]struct{}
@@ -509,9 +511,20 @@ type NetworkProtocolType struct {
 	Action     string            `json:"action,omitempty"`
 }
 
+// MatchDNSQueryType Structure
+type MatchDNSQueryType struct {
+	Domain     string            `json:"domain"`
+	FromSource []MatchSourceType `json:"fromSource,omitempty"`
+	Severity   int               `json:"severity,omitempty"`
+	Tags       []string          `json:"tags,omitempty"`
+	Message    string            `json:"message,omitempty"`
+	Action     string            `json:"action,omitempty"`
+}
+
 // NetworkType Structure
 type NetworkType struct {
-	MatchProtocols []NetworkProtocolType `json:"matchProtocols,omitempty"`
+	MatchProtocols  []NetworkProtocolType `json:"matchProtocols,omitempty"`
+	MatchDNSQueries []MatchDNSQueryType   `json:"matchDNSQueries,omitempty"`
 
 	Severity int      `json:"severity,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
@@ -688,7 +701,7 @@ type HostSecurityPolicy struct {
 type DefaultPosture struct {
 	FileAction         string `json:"file,omitempty"`
 	NetworkAction      string `json:"network,omitempty"`
-	CapabilitiesAction string `json:"capabilties,omitempty"`
+	CapabilitiesAction string `json:"capabilities,omitempty"`
 	DeviceAction       string `json:"device,omitempty"`
 }
 
@@ -697,7 +710,7 @@ type Visibility struct {
 	File         bool `json:"file,omitempty"`
 	Process      bool `json:"process,omitempty"`
 	Network      bool `json:"network,omitempty"`
-	Capabilities bool `json:"capabilties,omitempty"`
+	Capabilities bool `json:"capabilities,omitempty"`
 	DNS          bool `json:"dns,omitempty"`
 	IMA          bool `json:"ima,omitempty"`
 }
@@ -729,6 +742,9 @@ type IngressType struct {
 	Interface []string      `json:"iface,omitempty"`
 	Ports     []PortType    `json:"ports,omitempty"`
 
+	Limit    string `json:"limit,omitempty"`
+	Duration string `json:"duration,omitempty"`
+
 	Severity int      `json:"severity,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
 	Message  string   `json:"message,omitempty"`
@@ -741,6 +757,9 @@ type EgressType struct {
 	Interface []string      `json:"iface,omitempty"`
 	Ports     []PortType    `json:"ports,omitempty"`
 
+	Limit    string `json:"limit,omitempty"`
+	Duration string `json:"duration,omitempty"`
+
 	Severity int      `json:"severity,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
 	Message  string   `json:"message,omitempty"`
@@ -750,6 +769,9 @@ type EgressType struct {
 // NetworkSecuritySpec Structure
 type NetworkSecuritySpec struct {
 	NodeSelector NodeSelectorType `json:"nodeSelector"`
+	Selector     SelectorType     `json:"selector"`
+
+	Level string `json:"level,omitempty"`
 
 	Ingress []IngressType `json:"ingress,omitempty"`
 	Egress  []EgressType  `json:"egress,omitempty"`

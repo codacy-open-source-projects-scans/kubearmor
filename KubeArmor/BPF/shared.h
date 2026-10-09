@@ -27,7 +27,8 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 #define CAPABLE_KEY 200
 #define TTY_LEN 64
 #define MAX_STR_ARR_ELEM 20
-
+#define MAX_NESTED_DNS_LABELS 10
+#define MAX_DNS_LABEL_LEN 100
 #define READ_KERN(ptr)                                \
   ({                                                  \
     typeof(ptr) _val;                                 \
@@ -53,7 +54,8 @@ enum deny_by_default
   dproc = 101,
   dfile,
   dnet,
-  dcap
+  dcap,
+  ddns
 }; // check if the list is whitelist/blacklist
 enum network_check_type
 {
@@ -99,7 +101,7 @@ struct
   __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
   __type(key, u32);
   __type(value, bufs_k);
-  __uint(max_entries, 3);
+  __uint(max_entries, 4);
 } bufk SEC(".maps");
 
 //-- Maps structs for argument matching----/
@@ -265,6 +267,16 @@ struct exec_pid_map
   __uint(pinning, LIBBPF_PIN_BY_NAME);
 };
 
+// Shadow struct for new kernel (>= 6.4)
+struct iov_iter___new
+{
+  union
+  {
+    const struct iovec *__iov;
+    const struct iovec *iov;
+  };
+} __attribute__((preserve_access_index));
+
 struct exec_pid_map kubearmor_exec_pids SEC(".maps");
 
 static __always_inline bufs_t *get_buf(int idx)
@@ -282,12 +294,25 @@ static __always_inline u32 *get_buf_off(int buf_idx)
   return bpf_map_lookup_elem(&bufs_off, &buf_idx);
 }
 
+static __always_inline bool valid_buf_and_off(bufs_t *buf, u32 *off_ptr, u32 *off)
+{
+  if (!buf || !off_ptr)
+    return false;
+
+  *off = *off_ptr;
+
+  if (*off >= MAX_BUFFER_SIZE)
+    return false;
+
+  return true;
+}
+
 static inline struct mount *real_mount(struct vfsmount *mnt)
 {
   return container_of(mnt, struct mount, mnt);
 }
 
-static __always_inline bool prepend_path(struct path *path, bufs_t *string_p)
+static __always_inline bool prepend_path(const struct path *path, bufs_t *string_p)
 {
   char slash = '/';
   char null = '\0';
@@ -439,12 +464,31 @@ static __always_inline long strtol(const char *buf, size_t buf_len, long *res)
 
 static __always_inline u32 get_task_pid_ns_id(struct task_struct *task)
 {
-  return BPF_CORE_READ(task, nsproxy, pid_ns_for_children, ns).inum;
+  struct pid_namespace *pid_ns;
+  u32 inum = 0;
+
+  pid_ns = BPF_CORE_READ(task, nsproxy, pid_ns_for_children);
+
+  if (!pid_ns)
+    return 0;
+
+  bpf_core_read(&inum, sizeof(inum), &pid_ns->ns.inum);
+
+  return inum;
 }
 
 static __always_inline u32 get_task_mnt_ns_id(struct task_struct *task)
 {
-  return BPF_CORE_READ(task, nsproxy, mnt_ns, ns).inum;
+  struct mnt_namespace *mnt_ns;
+  u32 inum = 0;
+
+  mnt_ns = BPF_CORE_READ(task, nsproxy, mnt_ns);
+  if (!mnt_ns)
+    return 0;
+
+  bpf_core_read(&inum, sizeof(inum), &mnt_ns->ns.inum);
+
+  return inum;
 }
 
 static __always_inline u32 get_task_pid_vnr(struct task_struct *task)
@@ -683,7 +727,7 @@ static inline int match_and_enforce_path_hooks(struct path *f_path, u32 id,
   // "z" is a zero value map key which is used to reset values of other keys
   // which are inturn used and updated to lookup the Rule Map
 
-  // "store" stores informaton needed to do a lookup to our Rule Map
+  // "store" stores information needed to do a lookup to our Rule Map
 
   // "pk" is a map key which is used for all kinds of matching and lookups, We
   // needed a third key because we need to copy contents from store and keep
@@ -723,7 +767,7 @@ static inline int match_and_enforce_path_hooks(struct path *f_path, u32 id,
   bpf_probe_read_str(store->path, MAX_STRING_SIZE, path_ptr);
 
   struct data_t *val = bpf_map_lookup_elem(inner, store);
-  struct data_t *dirval;
+  struct data_t *dirval = NULL;
   bool recursivebuthint = false;
   bool fromSourceCheck = true;
 
@@ -1172,6 +1216,50 @@ static inline bool matchArguments(unsigned int num_of_args, struct outer_key *ok
   }
 
   return argmatch;
+}
+
+static __noinline int extract_dns_name(void *data, char *name)
+{
+  // Read the DNS payload
+
+  bufs_t *payload = get_buf(PATH_BUFFER);
+  if (!payload)
+    return 0;
+
+  bpf_probe_read_user(payload->buf, 256, data);
+
+  // Decode QNAME wire format: \x06google\x03com\x00 -> google.com
+  // volatile prevents Clang from emitting forbidden `|= on pointer` instructions.
+  volatile u8 llen = payload->buf[12]; // first label length byte (offset 12 = after DNS header)
+  volatile int bi = 13;                // byte index into buf
+  volatile int ni = 0;                 // byte index into name output
+
+#pragma unroll
+  for (int i = 0; i < 63; i++)
+  {
+    if (bi >= 256 || llen == 0 || llen > 63 || ni >= 63)
+      break;
+
+    name[ni & 63] = payload->buf[bi & 255]; // copy one label character
+    ni++;
+    bi++;
+    llen--;
+
+    if (llen == 0) // read next length byte
+    {
+      if (bi >= 256)
+        break;
+      llen = payload->buf[bi & 255];
+      bi++;
+      if (llen == 0 || llen > 63)
+        break; // root label (end) or invalid
+      if (ni < 63)
+        name[ni++ & 63] = '.'; // dot separator between labels
+    }
+  }
+
+  name[63] = '\0';
+  return ni;
 }
 
 /*

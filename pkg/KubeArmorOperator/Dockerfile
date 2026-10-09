@@ -1,16 +1,35 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 Authors of KubeArmor
 
-FROM docker.io/golang:1.25 AS builder
+FROM docker.io/golang:1.26.8@sha256:eb36c1664dd974cde625f736e02c204383deebe03977365caaec5bf49f794348 AS builder
 ARG GOARCH
 ARG GOOS
 
 WORKDIR /KubeArmor
 
-# relative deps requried by the operator
+RUN apt-get update && apt-get install -y clang llvm make gcc curl libelf-dev libbpf-dev
+
+RUN arch=$(uname -m) bpftool_version=v7.3.0 && \
+    if [ "$arch" = "aarch64" ]; then \
+        arch=arm64; \
+    elif [ "$arch" = "x86_64" ]; then \
+        arch=amd64; \
+    fi && \
+    curl -LO https://github.com/libbpf/bpftool/releases/download/$bpftool_version/bpftool-$bpftool_version-$arch.tar.gz && \
+    tar -xzf bpftool-$bpftool_version-$arch.tar.gz -C /usr/local/bin && \
+    chmod +x /usr/local/bin/bpftool
+
+# relative deps required by the operator
 ADD deployments deployments
 ADD KubeArmor KubeArmor
 ADD pkg/KubeArmorController pkg/KubeArmorController
+
+RUN if [ ! -f /KubeArmor/KubeArmor/BPF/vmlinux.h ]; then \
+        if [ -f /sys/kernel/btf/vmlinux ]; then \
+            bpftool btf dump file /sys/kernel/btf/vmlinux format c > /KubeArmor/KubeArmor/BPF/vmlinux.h || true; \
+        fi \
+    fi && \
+    cd /KubeArmor/KubeArmor/utils/bpflsmprobe && go generate ./...
 
 # KubeArmorOperator directory
 ARG OPERATOR_DIR=pkg/KubeArmorOperator
@@ -45,13 +64,20 @@ RUN CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} GO111MODULE=on go build -a -o op
 RUN CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} GO111MODULE=on go build -a -o snitch cmd/snitch-cmd/main.go
 RUN CGO_ENABLED=0 GOOS=${GOOS} GOARCH=${GOARCH} GO111MODULE=on go build -a -o hook/hook ./hook
 
-FROM redhat/ubi10-minimal AS operator
+# Build operator image with scratch as base image
+FROM scratch AS operator
+ARG OPERATOR_DIR=pkg/KubeArmorOperator
+COPY --from=builder /KubeArmor/$OPERATOR_DIR/operator /operator
+ENTRYPOINT ["/operator"]
+
+# Build operator image with ubi as base image
+FROM redhat/ubi10-minimal@sha256:3948fdfe71007909b37faf48c52eda28bfab7c4e440d6f4d4619422d06ceeb4c AS operator-ubi
 
 ARG VERSION=latest
 
 LABEL name="kubearmor-operator" \
-      vendor="Accuknox" \
-      maintainer="Barun Acharya, Ramakant Sharma" \
+      vendor="KubeArmor" \
+      maintainer="Achref Ben Saad, Aryan Sharma, Aryan Bakliwal" \
       version=${VERSION} \
       release=${VERSION} \
       summary="kubearmor-operator container image based on redhat ubi" \
@@ -72,17 +98,25 @@ USER 1000
 
 ENTRYPOINT ["/operator"]
 
-FROM redhat/ubi10-minimal AS snitch
+# Build snitch with scratch as base image
+FROM scratch AS snitch
+ARG OPERATOR_DIR=pkg/KubeArmorOperator
+COPY --from=builder /KubeArmor/$OPERATOR_DIR/snitch /snitch
+COPY --from=builder /KubeArmor/$OPERATOR_DIR/hook/hook /hook
+ENTRYPOINT ["/snitch"]
+
+# Build snitch with ubi as base image
+FROM redhat/ubi10-minimal@sha256:3948fdfe71007909b37faf48c52eda28bfab7c4e440d6f4d4619422d06ceeb4c AS snitch-ubi
 
 ARG VERSION=latest
 
 LABEL name="kubearmor-snitch" \
-      vendor="Accuknox" \
-      maintainer="Barun Acharya, Ramakant Sharma" \
+      vendor="KubeArmor" \
+      maintainer="Achref Ben Saad, Aryan Sharma, Aryan Bakliwal" \
       version=${VERSION} \
       release=${VERSION} \
       summary="kubearmor-snitch container image based on redhat ubi" \
-      description="KubeArmor-Snitch, A CLI Utility to Detect node related informations for KubeArmor"
+      description="KubeArmor-Snitch, A CLI Utility to Detect node related information for KubeArmor"
 
 ARG OPERATOR_DIR=pkg/KubeArmorOperator
 COPY --from=builder /KubeArmor/$OPERATOR_DIR/snitch /snitch

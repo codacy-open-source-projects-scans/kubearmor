@@ -14,7 +14,7 @@ spec:
       labels:
         kubearmor-app: kubearmor
       {{- if eq .Values.environment.name "autopilot" }}
-        "cloud.google.com/matching-allowlist": accuknox-kubearmor-{{ include "chart.majorMinorVersion" . }}
+        "cloud.google.com/matching-allowlist": accuknox-kubearmor-{{ if ne (.Values.gkeAllowlistVersion | default "") "" }}{{ .Values.gkeAllowlistVersion }}{{ else }}{{ include "chart.majorMinorVersion" . }}{{ end }}
       {{- end }}
     spec:
       {{- if .Values.kubearmor.image.imagePullSecrets }}
@@ -54,16 +54,20 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         livenessProbe:
-          exec:
-            command:
-            - /bin/bash
-            - -c
-            - if [ -z $(pgrep kubearmor) ]; then exit 1; fi;
+          grpc:
+            port: 32766
+          failureThreshold: 5
           initialDelaySeconds: 60
-          periodSeconds: 10
+          periodSeconds: 20
+          successThreshold: 1
+          timeoutSeconds: 5
+
         name: kubearmor
         ports:
         - containerPort: 32767
+          name: grpc
+        - containerPort: 32766
+          name: grpc-health
         securityContext:
           capabilities:
             {{- toYaml .Values.kubearmor.capabilities | trim | nindent 12 }}

@@ -5,12 +5,10 @@ package feeder
 
 import (
 	"math"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
 
 	cfg "github.com/kubearmor/KubeArmor/KubeArmor/config"
 	tp "github.com/kubearmor/KubeArmor/KubeArmor/types"
@@ -86,18 +84,6 @@ func fetchProtocol(resource string) string {
 		return "packet"
 	}
 	return resource
-}
-
-func getFileProcessUID(path string) string {
-	info, err := os.Stat(path)
-	if err == nil {
-		stat := info.Sys().(*syscall.Stat_t)
-		uid := stat.Uid
-
-		return strconv.Itoa(int(uid))
-	}
-
-	return ""
 }
 
 // getOperationAndCapabilityFromName Function
@@ -358,6 +344,22 @@ func (fd *Feeder) newMatchPolicy(policyEnabled int, policyName, src string, mp a
 		} else {
 			match.Action = npt.Action
 		}
+	} else if ndns, ok := mp.(tp.MatchDNSQueryType); ok {
+		match.Severity = strconv.Itoa(ndns.Severity)
+		match.Tags = ndns.Tags
+		match.Message = ndns.Message
+
+		match.Operation = "Network"
+		match.Resource = strings.ToLower(ndns.Domain)
+		match.ResourceType = "DNS"
+
+		if policyEnabled == tp.KubeArmorPolicyAudited && ndns.Action == "Allow" {
+			match.Action = "Audit (" + ndns.Action + ")"
+		} else if policyEnabled == tp.KubeArmorPolicyAudited && ndns.Action == "Block" {
+			match.Action = "Audit (" + ndns.Action + ")"
+		} else {
+			match.Action = ndns.Action
+		}
 	} else if cct, ok := mp.(tp.CapabilitiesCapabilityType); ok {
 		match.Severity = strconv.Itoa(cct.Severity)
 		match.Tags = cct.Tags
@@ -610,6 +612,38 @@ func (fd *Feeder) UpdateSecurityPolicies(action string, endPoint tp.EndPoint) {
 				matches.Policies = append(matches.Policies, match)
 			}
 
+		}
+
+		for _, dns := range secPolicy.Spec.Network.MatchDNSQueries {
+			if len(dns.Domain) == 0 {
+				continue
+			}
+
+			fromSource := ""
+
+			if len(dns.FromSource) == 0 {
+				match := fd.newMatchPolicy(endPoint.PolicyEnabled, policyName, fromSource, dns)
+				if len(match.Resource) == 0 {
+					continue
+				}
+				matches.Policies = append(matches.Policies, match)
+				continue
+			}
+
+			for _, src := range dns.FromSource {
+				if len(src.Path) > 0 {
+					fromSource = src.Path
+				} else {
+					continue
+				}
+
+				match := fd.newMatchPolicy(endPoint.PolicyEnabled, policyName, fromSource, dns)
+				if len(match.Resource) == 0 {
+					continue
+				}
+				match.IsFromSource = len(fromSource) > 0
+				matches.Policies = append(matches.Policies, match)
+			}
 		}
 
 		for _, cap := range secPolicy.Spec.Capabilities.MatchCapabilities {
@@ -927,6 +961,38 @@ func (fd *Feeder) UpdateHostSecurityPolicies(action string, secPolicies []tp.Hos
 				}
 
 				match := fd.newMatchPolicy(fd.Node.PolicyEnabled, policyName, fromSource, proto)
+				if len(match.Resource) == 0 {
+					continue
+				}
+				match.IsFromSource = len(fromSource) > 0
+				matches.Policies = append(matches.Policies, match)
+			}
+		}
+
+		for _, dns := range secPolicy.Spec.Network.MatchDNSQueries {
+			if len(dns.Domain) == 0 {
+				continue
+			}
+
+			fromSource := ""
+
+			if len(dns.FromSource) == 0 {
+				match := fd.newMatchPolicy(fd.Node.PolicyEnabled, policyName, fromSource, dns)
+				if len(match.Resource) == 0 {
+					continue
+				}
+				matches.Policies = append(matches.Policies, match)
+				continue
+			}
+
+			for _, src := range dns.FromSource {
+				if len(src.Path) > 0 {
+					fromSource = src.Path
+				} else {
+					continue
+				}
+
+				match := fd.newMatchPolicy(fd.Node.PolicyEnabled, policyName, fromSource, dns)
 				if len(match.Resource) == 0 {
 					continue
 				}
@@ -1403,7 +1469,12 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 							matchedRegex = fileMatch || procMatch
 						}
 					case "ExecName":
-						matchedRegex = strings.HasSuffix(log.ProcessName, "/"+secPolicy.Resource) // processpath = */execname
+						// match binary against ProcessName, ExecEvent (comm), or Resource (for scripts)
+						firstResource := strings.Split(log.Resource, " ")[0]
+						procMatch := strings.HasSuffix(log.ProcessName, "/"+secPolicy.Resource)
+						resMatch := strings.HasSuffix(firstResource, "/"+secPolicy.Resource)
+						execMatch := log.ExecEvent.ExecutableName == secPolicy.Resource
+						matchedRegex = procMatch || resMatch || execMatch
 					}
 
 					// match resources
@@ -1621,19 +1692,48 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 				if skip {
 					break // break, so that once source is matched for a log it doesn't look for other cases
 				}
+
 				// match sources
 				if (!secPolicy.IsFromSource) || (secPolicy.IsFromSource && (strings.HasPrefix(log.Source, secPolicy.Source+" ") || secPolicy.Source == log.ProcessName)) {
 					matchedFlags := false
 
-					protocol := fetchProtocol(log.Resource)
-					if protocol == secPolicy.Resource || secPolicy.Resource == "all" {
-						matchedFlags = true
-					}
-					if secPolicy.Pts != nil && !*secPolicy.Pts {
-						if log.TTY == "" {
-							matchedFlags = false
-						} else {
+					protocol := "unknown"
+					switch secPolicy.ResourceType {
+					case "Protocol":
+						protocol = fetchProtocol(log.Resource)
+						if protocol == secPolicy.Resource || secPolicy.Resource == "all" {
 							matchedFlags = true
+						}
+						if secPolicy.Pts != nil && !*secPolicy.Pts {
+							if log.TTY == "" {
+								matchedFlags = false
+							} else {
+								matchedFlags = true
+							}
+						}
+					case "DNS":
+						// For BPFLSM events, log.Resource is the domain.
+						// For kprobe (udp_sendmsg) audit events, the domain is embedded in log.Data (e.g., "domain=google.com").
+						resource := strings.ToLower(log.Resource)
+						if strings.Contains(log.Data, "domain=") {
+							for _, part := range strings.Split(log.Data, " ") {
+								if strings.HasPrefix(part, "domain=") {
+									resource = strings.ToLower(strings.TrimPrefix(part, "domain="))
+									break
+								}
+							}
+						}
+
+						// Match exact domain or K8s search-path expansions (e.g. google.com.svc.cluster.local)
+						domain := strings.ToLower(secPolicy.Resource)
+						resourceSlice := strings.Split(resource, ".")
+						for len(resourceSlice) != 0 {
+							resource = strings.Join(resourceSlice, ".")
+							if resource == domain || strings.HasPrefix(resource, domain+".") {
+								log.Resource = secPolicy.Resource // normalize log resource to the policy resource
+								matchedFlags = true
+							}
+							resourceSlice = resourceSlice[1:]
 						}
 					}
 
@@ -1724,7 +1824,7 @@ func (fd *Feeder) UpdateMatchedPolicy(log tp.Log) tp.Log {
 						}
 					}
 					// if protocol is unknown we skip the audit alert event
-					if protocol == "unknown" {
+					if protocol == "unknown" && secPolicy.ResourceType == "Protocol" {
 						log.Type = "MatchedPolicy"
 						log.Action = "Allow"
 						continue

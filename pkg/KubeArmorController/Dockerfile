@@ -2,7 +2,7 @@
 # Copyright 2026 Authors of KubeArmor
 
 # Build the manager binary
-FROM golang:1.25 AS builder
+FROM golang:1.26.8@sha256:eb36c1664dd974cde625f736e02c204383deebe03977365caaec5bf49f794348 AS builder
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -10,7 +10,7 @@ COPY go.mod go.mod
 COPY go.sum go.sum
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
-RUN go mod download
+RUN go mod download && go mod verify
 
 # Copy the go source
 COPY cmd/main.go cmd/main.go
@@ -22,15 +22,22 @@ COPY types/ types/
 COPY common/ common/
 
 # Build
-RUN CGO_ENABLED=0 GO111MODULE=on go build -a -o manager cmd/main.go
+RUN CGO_ENABLED=0 GO111MODULE=on GOPROXY=off go build -a -o manager cmd/main.go
 
-FROM redhat/ubi10-minimal AS controller
+# Build controller with scratch as base image
+FROM scratch AS controller
+WORKDIR /
+COPY --from=builder /workspace/manager .
+ENTRYPOINT ["/manager"]
+
+# Build controller with ubi as base image
+FROM redhat/ubi10-minimal@sha256:3948fdfe71007909b37faf48c52eda28bfab7c4e440d6f4d4619422d06ceeb4c AS controller-ubi
 
 ARG VERSION=latest
 
 LABEL name="kubearmor-controller" \
-      vendor="AccuKnox" \
-      maintainer="Barun Acharya, Ramakant Sharma" \
+      vendor="KubeArmor" \
+      maintainer="Achref Ben Saad, Aryan Sharma, Aryan Bakliwal" \
       version=${VERSION} \
       release=${VERSION} \
       summary="kubearmor-controller container image based on redhat ubi" \

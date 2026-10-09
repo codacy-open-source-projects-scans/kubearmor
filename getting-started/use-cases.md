@@ -189,7 +189,7 @@ spec:
   <summary><h2>Limit access to raw database tables in the pod</h2></summary>
 
 ### Description
-MySQL and other database systems keep their raw tables in a specific folder path. This path can either if a path in a volume mount or local to the pod. Typically, these raw tables are accessed only by certain set of processes such as `mysqld`, `mysqldump`, `mysqladmin`. Any other binary should never be allowed to read or write into this folder.
+MySQL and other database systems keep their raw tables in a specific folder path. This path can either be a path in a volume mount or local to the pod. Typically, these raw tables are accessed only by certain set of processes such as `mysqld`, `mysqldump`, `mysqladmin`. Any other binary should never be allowed to read or write into this folder.
 
 ### Attack Scenario
 Attackers will try to:
@@ -198,7 +198,28 @@ Attackers will try to:
 3. delete the tables to cause system downtime
   
 ### Sample Policy
-TODO
+```yaml
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorPolicy
+metadata:
+  name: limit-mysql-raw-table-access
+  namespace: mysql
+spec:
+  severity: 5
+  selector:
+    matchLabels:
+      app: mysql
+  file:
+    matchDirectories:
+    - dir: /var/lib/mysql/
+      recursive: true
+      fromSource:
+      - path: /usr/sbin/mysqld
+      - path: /usr/bin/mysqldump
+      - path: /usr/bin/mysqladmin
+  action:
+    Allow
+```
 </details>
 
 <details>
@@ -211,7 +232,31 @@ Typically, within a pod/container there are only specific processes that need to
 An attacker binary would try to send a beacon to its C&C (Command and Control) Server. Also the binary might use the network primitives to exfiltrate pod/container data/configuration.
   
 ### Sample Policy
-TODO
+```yaml
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorPolicy
+metadata:
+  name: restrict-network-primitives
+  namespace: default
+spec:
+  severity: 5
+  selector:
+    matchLabels:
+      app: my-app
+  network:
+    matchProtocols:
+    - protocol: tcp
+      fromSource:
+      - path: /usr/bin/curl
+    - protocol: udp
+      fromSource:
+      - path: /usr/bin/curl
+    - protocol: raw
+      fromSource:
+      - path: /bin/ping
+  action:
+    Allow
+```
 </details>
 
 ## Generic use-cases
@@ -223,7 +268,7 @@ TODO
 
   In general, security policies \(e.g., Seccomp and AppArmor profiles\) are statically defined within pod definitions for Kubernetes, and they are applied to containers at creation time. Then, the security policies are not allowed to be updated in runtime.
 
-  To address those problems, KubeArmor users k8s CRDs to define security policies, such that the orchestration of the policy is handled by the k8s control plane. KubeArmor leverages Linux Security Modules (LSMs) to enforce the security policies at the container level according to the labels of given containers and security policies. Similiarly, KubeArmor support policy enforcement at the Host/Node/VM level using `KubeArmorHostSecurityPolicy` k8s resource.
+  To address those problems, KubeArmor users k8s CRDs to define security policies, such that the orchestration of the policy is handled by the k8s control plane. KubeArmor leverages Linux Security Modules (LSMs) to enforce the security policies at the container level according to the labels of given containers and security policies. Similarly, KubeArmor support policy enforcement at the Host/Node/VM level using `KubeArmorHostSecurityPolicy` k8s resource.
 
 - Produce container-aware alerts and system logs
 

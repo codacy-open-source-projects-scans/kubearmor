@@ -226,8 +226,39 @@ type MatchHostNetworkProtocolType struct {
 	Action ActionType `json:"action,omitempty"`
 }
 
+type MatchDNSQueryType struct {
+	Domain string `json:"domain"`
+	// +kubebuilder:validation:optional
+	FromSource []MatchSourceType `json:"fromSource,omitempty"`
+
+	// +kubebuilder:validation:optional
+	Severity SeverityType `json:"severity,omitempty"`
+	// +kubebuilder:validation:optional
+	Tags []string `json:"tags,omitempty"`
+	// +kubebuilder:validation:optional
+	Message string `json:"message,omitempty"`
+	// +kubebuilder:validation:optional
+	Action ActionType `json:"action,omitempty"`
+}
+
+type MatchHostDNSQueryType struct {
+	Domain string `json:"domain"`
+	// +kubebuilder:validation:optional
+	FromSource []MatchSourceType `json:"fromSource,omitempty"`
+
+	// +kubebuilder:validation:optional
+	Severity SeverityType `json:"severity,omitempty"`
+	// +kubebuilder:validation:optional
+	Tags []string `json:"tags,omitempty"`
+	// +kubebuilder:validation:optional
+	Message string `json:"message,omitempty"`
+	// +kubebuilder:validation:optional
+	Action ActionType `json:"action,omitempty"`
+}
+
 type NetworkType struct {
-	MatchProtocols []MatchNetworkProtocolType `json:"matchProtocols,omitempty"`
+	MatchProtocols  []MatchNetworkProtocolType `json:"matchProtocols,omitempty"`
+	MatchDNSQueries []MatchDNSQueryType        `json:"matchDNSQueries,omitempty"`
 
 	// +kubebuilder:validation:optional
 	Severity SeverityType `json:"severity,omitempty"`
@@ -240,7 +271,8 @@ type NetworkType struct {
 }
 
 type HostNetworkType struct {
-	MatchProtocols []MatchHostNetworkProtocolType `json:"matchProtocols,omitempty"`
+	MatchProtocols  []MatchHostNetworkProtocolType `json:"matchProtocols,omitempty"`
+	MatchDNSQueries []MatchHostDNSQueryType        `json:"matchDNSQueries,omitempty"`
 
 	// +kubebuilder:validation:optional
 	Severity SeverityType `json:"severity,omitempty"`
@@ -436,6 +468,17 @@ type IngressType struct {
 	Ports     []PortType    `json:"ports,omitempty"`
 
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^[0-9]+(KB|MB|GB|K|M|G)?$`
+	// Limit defines the inbound bandwidth quota. Accepts a value with unit suffix:
+	// e.g. "500MB", "2GB", "1024KB".
+	Limit string `json:"limit,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	// Duration defines how often the quota counter is reset.
+	// Accepts formats like "2h", "30m", "45s".
+	Duration string `json:"duration,omitempty"`
+
+	// +kubebuilder:validation:Optional
 	Severity int `json:"severity,omitempty"`
 
 	// +kubebuilder:validation:Optional
@@ -453,6 +496,17 @@ type EgressType struct {
 	To        []NetworkPeer `json:"to,omitempty"`
 	Interface []string      `json:"iface,omitempty"`
 	Ports     []PortType    `json:"ports,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^[0-9]+(KB|MB|GB|K|M|G)?$`
+	// Limit defines the outbound bandwidth quota. Accepts a value with unit suffix:
+	// e.g. "500MB", "2GB", "1024KB". Defaults to GB if no unit is given.
+	Limit string `json:"limit,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	// Duration defines how often the quota counter is reset.
+	// Accepts formats like "2h", "30m", "45s".
+	Duration string `json:"duration,omitempty"`
 
 	// +kubebuilder:validation:Optional
 	Severity int `json:"severity,omitempty"`

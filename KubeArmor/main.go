@@ -5,9 +5,12 @@
 package main
 
 import (
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/kubearmor/KubeArmor/KubeArmor/buildinfo"
 	kl "github.com/kubearmor/KubeArmor/KubeArmor/common"
@@ -18,6 +21,54 @@ import (
 
 func init() {
 	buildinfo.PrintBuildDetails()
+}
+
+func isKubeArmorBpfMap(name string) bool {
+	return strings.HasPrefix(name, "kubearmor")
+}
+
+func cleanupBpfMaps(bpfMapsDir string, removeFn func(string) error) error {
+	entries, err := os.ReadDir(bpfMapsDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if isKubeArmorBpfMap(entry.Name()) {
+			path := filepath.Join(bpfMapsDir, entry.Name())
+			if err := removeFn(path); err != nil {
+				kg.Errf("Failed to delete BPF map %s: %v", path, err)
+			} else {
+				kg.Warnf("Deleting existing map %s. This indicates previous cleanup failed", path)
+			}
+		}
+	}
+	return nil
+}
+
+// startPprofServer serves pprof profiling endpoints on a dedicated mux
+func startPprofServer(addr string) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		kg.Printf("Started pprof server on %s", addr)
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			kg.Errf("Failed to start pprof server: %v", err)
+		}
+	}()
 }
 
 func main() {
@@ -31,28 +82,9 @@ func main() {
 
 	bpfMapsDir := "/sys/fs/bpf/"
 
-	entries, err := os.ReadDir(bpfMapsDir)
-	if err != nil {
+	if err := cleanupBpfMaps(bpfMapsDir, kl.RemoveSafe); err != nil {
 		kg.Errf("Failed to read BPF map directory: %v", err)
 		return
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		if strings.HasPrefix(entry.Name(), "kubearmor") {
-			/* This should not be triggered in ideal cases,
-			if this is triggered that means there is incomplete cleanup process
-			from the last installation */
-			path := filepath.Join(bpfMapsDir, entry.Name())
-			err := kl.RemoveSafe(path)
-			if err != nil {
-				kg.Errf("Failed to delete BPF map %s: %v", path, err)
-			} else {
-				kg.Warnf("Deleting existing map %s. This indicates previous cleanup failed", path)
-			}
-		}
 	}
 
 	dir, err := filepath.Abs(filepath.Dir(os.Args[0]))
@@ -69,6 +101,10 @@ func main() {
 	if err := cfg.LoadConfig(); err != nil {
 		kg.Err(err.Error())
 		return
+	}
+
+	if cfg.GlobalCfg.EnablePprof {
+		startPprofServer(cfg.GlobalCfg.PprofAddr)
 	}
 
 	core.KubeArmor()
